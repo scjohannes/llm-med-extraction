@@ -221,7 +221,7 @@ cbind(results, true_difference_sim) |>
   ggplot() +
   geom_point(aes(x = sim, y = estimate)) +
   geom_errorbar(aes(x = sim, y = estimate, ymin = conf.low, ymax = conf.high)) + 
-  geom_point(aes(y = true_difference_sim, x = sim), color = "blue", size = 2) +
+  geom_point(aes(y = true_difference_sim, x = sim), color = "blue", size = 2) + #true difference
   theme_light() +
   labs(
     x = "Simulations",
