@@ -1,6 +1,23 @@
 library(tidyverse)
 library(marginaleffects)
 library(lme4)
+
+# I think we have type error inflation for but only in one sense. For each
+# simulation the true difference between humans and the LLM is slightly
+# different, depending on the sample from the beta distribution and depending on
+# how many reports everyone analyses. I think, but have not implemented yet, the
+# the 95% CI will cover these varying true difference between humans and the llm
+# 95% of the time. But not the "grand" truth from which we sample. I will have
+# to check, but I think we only have type I error inflation in the 2nd sense.
+
+# How to check. Keep performance and number of reports extracted by each person
+# the same for each simulation. Ground truth should be difference between
+# weighted mean of humans and the single value of llm. We will have some
+# variation because we still do berounlli trials.
+
+# UPDATE: I implemented something truth at the level of the simulation, but the
+# type I error is STILL TOOO HIGH!
+
 # --- Simulation Parameters ---
 
 # --- Parameters for Data Generation ---
@@ -106,12 +123,13 @@ results |>
 
 p_llm   <- 0.899 # Just more than 5% worse. How many times wouuld we say that llm is not more than 5% worse, if it actually is?
 
-set.seed(2025)
+set.seed(2024)
 
 results <- data.frame()
 results.ml <- data.frame()
+true_difference_sim <- numeric()
 
-for(i in 1:20){
+for(i in 1:30){
   message(paste0("Simulation ", i))
   
   human_accuracies <- rbeta(n_human_coders_total, shape1 = beta_shape1, shape2 = beta_shape2)
@@ -124,24 +142,30 @@ for(i in 1:20){
   
   sim_data_list <- vector("list", n_reports)
   
-  for (i in 1:n_reports) {
+  for (j in 1:n_reports) {
     selected_human_ids <- sample(human_coder_ids, n_human_coders_per_report, replace = FALSE)
     report_extractors <- c(selected_human_ids, llm_id)
     report_extractor_info <- extractor_lookup |> filter(extractor_id %in% report_extractors)
     report_data <- report_extractor_info |>
       mutate(
-        report_id = report_ids[i],
+        report_id = report_ids[j],
         correct = rbinom(n(), 1, accuracy_p)
       ) |>
-      select(report_id, extractor_id, is_llm, correct) # Removed accuracy_p
-    sim_data_list[[i]] <- report_data
+      select(report_id, extractor_id, is_llm, correct, accuracy_p)
+    sim_data_list[[j]] <- report_data
   }
   
   sim_data_long <- bind_rows(sim_data_list)
   
+  human_data_sim <- sim_data_long |> filter(is_llm == 0)
+  true_mean_human_accuracy_sim <- sum(human_data_sim$accuracy_p) / nrow(human_data_sim)
+  
+  true_difference_sim[i] <- p_llm - true_mean_human_accuracy_sim
+  
+  
   # Fit Simple GLM Model (ignoring clustering structure here)
   model_fit <- glm(correct ~ is_llm, data = sim_data_long, family = binomial(link = "logit"))
-  ml.model_fit <- glmer(correct ~ is_llm + (is_llm|report_id) + (1|extractor_id), data = sim_data_long, family = binomial(link = "logit"))
+  # ml.model_fit <- glmer(correct ~ is_llm + (is_llm|report_id) + (1|extractor_id), data = sim_data_long, family = binomial(link = "logit"))
   
   # Calculate difference using marginal effects. Uses delta method and cluster robust standard errors.
   comparison <- avg_comparisons(
@@ -153,21 +177,21 @@ for(i in 1:20){
     equivalence = equivalence_bounds
   )
   
-  ml.comparison <- avg_comparisons(
-    ml.model_fit,
-    variables = "is_llm",
-    type = "response",
-    equivalence = equivalence_bounds,
-    re.form = NULL
-  )
+  # ml.comparison <- avg_comparisons(
+  #   ml.model_fit,
+  #   variables = "is_llm",
+  #   type = "response",
+  #   equivalence = equivalence_bounds,
+  #   re.form = NULL
+  # )
   
   results <- bind_rows(
     comparison |> data.frame() |> select(estimate, conf.low, conf.high, p.value, p.value.noninf), 
     results)
   
-  results.ml <- bind_rows(
-    ml.comparison |> data.frame() |> select(estimate, conf.low, conf.high, p.value, p.value.noninf), 
-    results)
+  # results.ml <- bind_rows(
+  #   ml.comparison |> data.frame() |> select(estimate, conf.low, conf.high, p.value, p.value.noninf), 
+  #   results)
   
 }
 
@@ -191,7 +215,28 @@ results |>
     axis.ticks.x = element_blank()
   )
 
-results.ml |> 
+cbind(results, true_difference_sim) |> 
+  mutate(sim = row_number()) |> 
+  data.frame() |> 
+  ggplot() +
+  geom_point(aes(x = sim, y = estimate)) +
+  geom_errorbar(aes(x = sim, y = estimate, ymin = conf.low, ymax = conf.high)) + 
+  geom_point(aes(y = true_difference_sim, x = sim), color = "blue", size = 2) +
+  theme_light() +
+  labs(
+    x = "Simulations",
+    y  = "Difference (LLM - Humans)"
+  ) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+cbind(results, true_difference_sim) |> 
+  mutate(type_i_error = if_else(conf.low > true_difference_sim, 1, 0)) |> 
+  pull(type_i_error) |> mean()
+
+results.m |> 
   mutate(sim = row_number()) |> 
   data.frame() |> 
   ggplot(aes(x = sim, y = estimate)) +
