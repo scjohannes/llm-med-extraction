@@ -1,17 +1,18 @@
 library(tidyverse)
 library(marginaleffects)
+library(lme4)
 # --- Simulation Parameters ---
 
 # --- Parameters for Data Generation ---
 # Number of human coders involved in the study
-n_human_coders_total <- 5 # Total pool of human coders
+n_human_coders_total <- 10 # Total pool of human coders
 n_human_coders_per_report <- 2 # Number of humans coding each report
 
 # Beta distribution shape parameters for human coder accuracy
 # Higher shape1 relative to shape2 means higher mean accuracy.
 # Higher sum (shape1+shape2) means lower variance.
-beta_shape1 <- 40
-beta_shape2 <- 2.104
+beta_shape1 <- 80
+beta_shape2 <- 4.204
 
 # Check mean: beta_shape1 / (beta_shape1 + beta_shape2) -> ~0.95
 
@@ -105,11 +106,12 @@ results |>
 
 p_llm   <- 0.899 # Just more than 5% worse. How many times wouuld we say that llm is not more than 5% worse, if it actually is?
 
-set.seed(12345)
+set.seed(2025)
 
 results <- data.frame()
+results.ml <- data.frame()
 
-for(i in 1:200){
+for(i in 1:20){
   message(paste0("Simulation ", i))
   
   human_accuracies <- rbeta(n_human_coders_total, shape1 = beta_shape1, shape2 = beta_shape2)
@@ -139,6 +141,7 @@ for(i in 1:200){
   
   # Fit Simple GLM Model (ignoring clustering structure here)
   model_fit <- glm(correct ~ is_llm, data = sim_data_long, family = binomial(link = "logit"))
+  ml.model_fit <- glmer(correct ~ is_llm + (is_llm|report_id) + (1|extractor_id), data = sim_data_long, family = binomial(link = "logit"))
   
   # Calculate difference using marginal effects. Uses delta method and cluster robust standard errors.
   comparison <- avg_comparisons(
@@ -150,9 +153,22 @@ for(i in 1:200){
     equivalence = equivalence_bounds
   )
   
+  ml.comparison <- avg_comparisons(
+    ml.model_fit,
+    variables = "is_llm",
+    type = "response",
+    equivalence = equivalence_bounds,
+    re.form = NULL
+  )
+  
   results <- bind_rows(
     comparison |> data.frame() |> select(estimate, conf.low, conf.high, p.value, p.value.noninf), 
     results)
+  
+  results.ml <- bind_rows(
+    ml.comparison |> data.frame() |> select(estimate, conf.low, conf.high, p.value, p.value.noninf), 
+    results)
+  
 }
 
 #Calculate Power
@@ -160,6 +176,22 @@ type_i_error_rate <- mean(results$p.value.noninf < 0.05)
 type_i_error_rate
 
 results |> 
+  mutate(sim = row_number()) |> 
+  data.frame() |> 
+  ggplot(aes(x = sim, y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + 
+  theme_light() +
+  labs(
+    x = "Simulations",
+    y  = "Difference (LLM - Humans)"
+  ) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+results.ml |> 
   mutate(sim = row_number()) |> 
   data.frame() |> 
   ggplot(aes(x = sim, y = estimate)) +
