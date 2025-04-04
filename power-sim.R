@@ -1,6 +1,5 @@
 library(tidyverse)
 library(marginaleffects)
-library(lme4)
 
 # In the first simulation I implemented the acccuracy of each coder is the only
 # random varaible. The underlying accuracies of each coder, the llm, and hoe
@@ -19,9 +18,9 @@ library(lme4)
 
 # Null Hypthesis is true, LLM is actually slightly worse than humans.
 
-set.seed(2024)
+set.seed(2026)
 
-p_llm   <- 0.899 # Just more than 5% worse. How many times wouuld we say that llm is not more than 5% worse, if it actually is?
+p_llm   <- 0.90 # Just more than 5% worse. How many times wouuld we say that llm is not more than 5% worse, if it actually is?
 
 results <- data.frame()
 results.ml <- data.frame()
@@ -30,6 +29,7 @@ true_difference_sim <- numeric()
 n_human_coders_per_report <- 2 # Number of humans coding each report
 
 sd_difficulty <- 0.5 # Standard deviation for report difficulty (logit scale)
+correlation_difficulty <- -0.2 # Correlation between human and LLM difficulty
 
 n_human_coders_total <- 6 
 human_accuracies <- c(0.95, 0.95, 0.94, 0.93, 0.96, 0.97) #arithmetric mean = 0.95
@@ -56,7 +56,10 @@ message("Generating fixed report difficulties...")
 report_difficulty_lookup <- tibble(
   report_id = report_ids,
   report_difficulty_logit = rnorm(n_reports, 0, sd_difficulty)
-)
+) |> 
+  mutate(llm_difficulty_logit = 
+           report_difficulty_logit*-correlation_difficulty + 
+           rnorm(n_reports, 0, sd_difficulty))
 
 # --- Generate FIXED Assignments for Reports (Outside Loop) ---
 message("Generating fixed extractor assignments...")
@@ -78,14 +81,17 @@ sim_setup_data <- sim_data_assigned |>
   left_join(report_difficulty_lookup, by = "report_id") |>
   mutate(
     # Calculate actual probability for this extractor on this report
-    logit_p_actual = logit_accuracy_baseline + report_difficulty_logit,
-    p_actual = plogis(logit_p_actual)
+    logit_p_human = logit_accuracy_baseline + report_difficulty_logit,
+    logit_p_llm = logit_accuracy_baseline + llm_difficulty_logit,
+    p_human = plogis(logit_p_human),
+    p_llm = plogis(logit_p_llm),
+    p_actual = if_else(is_llm == 0, p_human, p_llm)
   )
 
 # --- Calculate the SINGLE FIXED True Average Difference (Outside Loop) ---
 message("Calculating the single true average difference...")
-avg_p_actual_llm_fixed <- mean(sim_setup_data$p_actual[sim_setup_data$is_llm == 1])
-avg_p_actual_human_fixed <- mean(sim_setup_data$p_actual[sim_setup_data$is_llm == 0])
+avg_p_actual_llm_fixed <- mean(sim_setup_data$p_llm[sim_setup_data$is_llm == 1])
+avg_p_actual_human_fixed <- mean(sim_setup_data$p_human[sim_setup_data$is_llm == 0])
 true_difference_fixed <- avg_p_actual_llm_fixed - avg_p_actual_human_fixed
 
 message(paste("Fixed True Average Difference (LLM - Human):", round(true_difference_fixed, 4)))
@@ -94,8 +100,9 @@ message(paste("Fixed True Average Difference (LLM - Human):", round(true_differe
 sim_data_list <- vector("list", n_reports)
 
 results <- data.frame()
+results_m <- data.frame()
 
-for(i in 1:500){
+for(i in 1:100){
   message(paste0("Simulation ", i))
   
   sim_data_long <- sim_setup_data |> 
@@ -113,6 +120,7 @@ for(i in 1:500){
   
   # Fit Simple GLM Model (ignoring clustering structure here)
   model_fit <- glm(correct ~ is_llm, data = sim_data_long, family = binomial(link = "logit"))
+  # model_m_fit <- glmer(correct ~ is_llm + (is_llm|report_id), data = sim_data_long, family = binomial(link = "logit"))
   
   # Calculate difference using marginal effects. Uses delta method and cluster robust standard errors.
   comparison <- avg_comparisons(
@@ -125,9 +133,23 @@ for(i in 1:500){
     equivalence = equivalence_bounds
   )
   
+  # comparison_m <- avg_comparisons(
+  #   model_m_fit,
+  #   variables = "is_llm",
+  #   type = "response",
+  #   comparison = "difference",
+  #   equivalence = equivalence_bounds,
+  #   re.form = NULL
+  # )
+  
   results <- bind_rows(
     comparison |> data.frame() |> select(estimate, conf.low, conf.high, p.value, p.value.noninf), 
     results)
+  
+  # results_m <- bind_rows(
+  #   comparison_m |> data.frame() |> select(estimate, conf.low, conf.high, p.value, p.value.noninf), 
+  #   results)
+  
 }
 
 # Calculate Type I error rate
@@ -138,22 +160,6 @@ type_i_error_rate
 cbind(results, true_difference_sim) |> 
   mutate(type_i_error = if_else(conf.low > true_difference_sim, 1, 0)) |> 
   pull(type_i_error) |> mean()
-
-results |> 
-  mutate(sim = row_number()) |> 
-  data.frame() |> 
-  ggplot(aes(x = sim, y = estimate)) +
-  geom_point() +
-  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + 
-  theme_light() +
-  labs(
-    x = "Simulations",
-    y  = "Difference (LLM - Humans)"
-  ) +
-  theme(
-    axis.text.x = element_blank(),
-    axis.ticks.x = element_blank()
-  )
 
 cbind(results, true_difference_sim) |> 
   mutate(sim = row_number()) |> 
@@ -173,6 +179,23 @@ cbind(results, true_difference_sim) |>
     axis.ticks.x = element_blank()
   )
 
+# cbind(results_m[1:100, ], true_difference_sim) |> 
+#   mutate(sim = row_number()) |> 
+#   data.frame() |> 
+#   ggplot() +
+#   geom_point(aes(x = sim, y = estimate)) +
+#   geom_errorbar(aes(x = sim, y = estimate, ymin = conf.low, ymax = conf.high)) + 
+#   geom_hline(yintercept = -non_inferiority_margin, color = "red") + #non-inferiority margin
+#   geom_point(aes(y = true_difference_sim, x = sim), color = "blue", size = 2) + #true difference
+#   theme_light() +
+#   labs(
+#     x = "Simulations",
+#     y  = "Difference (LLM - Humans)"
+#   ) +
+#   theme(
+#     axis.text.x = element_blank(),
+#     axis.ticks.x = element_blank()
+#   )
 
 
 
