@@ -134,6 +134,11 @@ for(i in 1:500){
 type_i_error_rate <- mean(results$p.value.noninf < 0.05)
 type_i_error_rate
 
+# Not sure why the two don't match
+cbind(results, true_difference_sim) |> 
+  mutate(type_i_error = if_else(conf.low > true_difference_sim, 1, 0)) |> 
+  pull(type_i_error) |> mean()
+
 results |> 
   mutate(sim = row_number()) |> 
   data.frame() |> 
@@ -167,10 +172,6 @@ cbind(results, true_difference_sim) |>
     axis.text.x = element_blank(),
     axis.ticks.x = element_blank()
   )
-
-cbind(results, true_difference_sim) |> 
-  mutate(type_i_error = if_else(conf.low > true_difference_sim, 1, 0)) |> 
-  pull(type_i_error) |> mean()
 
 
 
