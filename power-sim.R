@@ -15,7 +15,7 @@ library(marginaleffects)
 
 set.seed(2)
 
-llm_skill   <- 0.899 # Just more than 5% worse. How many times wouuld we say that llm is not more than 5% worse, if it actually is?
+llm_skill   <- 0.95 # Just more than 5% worse. How many times wouuld we say that llm is not more than 5% worse, if it actually is?
 
 results <- data.frame()
 results.ml <- data.frame()
@@ -23,16 +23,16 @@ true_difference_sim <- numeric()
 
 n_human_coders_per_report <- 2 # Number of humans coding each report
 
-sd_difficulty <- 0.5 # Standard deviation for report difficulty (logit scale)
+sd_difficulty <- 1 # Standard deviation for report difficulty (logit scale)
 correlation_difficulty <- -0.2 # Correlation between human and LLM difficulty
 
 # NOTE: As the inherent human skill is very very close to one (see blow),
 # increasing the SD of the difficulty (this is on the logit scale), will cause
-# the overall accuracy to go down. Because large positive values of the
-# difficulty will only increase the accuracy on the probability scale from e.g.,
-# 0.95 to 0.98, but large negative values will decrease it from 0.95 to much
-# lower values. It's linear on the logit scale, but not linear on the
-# probability scale.
+# the overall accuracy to go down on the probability scale. Because large
+# positive values of the difficulty will only increase the accuracy on the
+# probability scale from e.g., 0.95 to 0.98, but large negative values will
+# decrease it from 0.95 to much lower values. It's linear on the logit scale,
+# but not linear on the probability scale.
 
 
 n_human_coders_total <- 6 
@@ -46,7 +46,7 @@ human_skill <- c(0.95, 0.95, 0.94, 0.93, 0.96, 0.97) #arithmetric mean = 0.95
 
 non_inferiority_margin <- 0.05
 equivalence_bounds <- c(-non_inferiority_margin, Inf) # Test H1: LLM - Human > -0.05
-n_reports <- 300
+n_reports <- 3000
 
 human_coder_ids <- paste0("human_", 1:n_human_coders_total)
 report_ids <- paste0("report_", 1:n_reports)
