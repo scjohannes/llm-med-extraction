@@ -13,9 +13,9 @@ library(marginaleffects)
 
 # Null Hypthesis is true, LLM is actually slightly worse than humans.
 
-set.seed(2026)
+set.seed(2)
 
-llm_skill   <- 0.95 # Just more than 5% worse. How many times wouuld we say that llm is not more than 5% worse, if it actually is?
+llm_skill   <- 0.899 # Just more than 5% worse. How many times wouuld we say that llm is not more than 5% worse, if it actually is?
 
 results <- data.frame()
 results.ml <- data.frame()
@@ -46,7 +46,6 @@ human_skill <- c(0.95, 0.95, 0.94, 0.93, 0.96, 0.97) #arithmetric mean = 0.95
 
 non_inferiority_margin <- 0.05
 equivalence_bounds <- c(-non_inferiority_margin, Inf) # Test H1: LLM - Human > -0.05
-alpha <- 0.05
 n_reports <- 300
 
 human_coder_ids <- paste0("human_", 1:n_human_coders_total)
@@ -142,12 +141,14 @@ for(i in 1:200){
   # model_m_fit <- glmer(correct ~ is_llm + (is_llm|report_id), data = sim_data_long, family = binomial(link = "logit"))
   
   # Calculate difference using marginal effects. Uses delta method and cluster robust standard errors.
+  # NOTE: I'm setting the width of the confidence interval to 0.9 so the lower bound 'corresponds' to the one sided alpha of 0.05
   comparison <- avg_comparisons(
     model_fit,
     variables = "is_llm",
     type = "response",
     comparison = "difference",
     vcov = ~report_id,
+    conf_level = 0.9,
     equivalence = equivalence_bounds # this calculates the non-inferioty p-value (see bound set at the top)
   )
   
