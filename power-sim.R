@@ -13,17 +13,17 @@ library(marginaleffects)
 
 # Null Hypthesis is true, LLM is actually slightly worse than humans.
 
-set.seed(2)
+set.seed(1)
 
-llm_skill   <- 0.95 # Just more than 5% worse. How many times wouuld we say that llm is not more than 5% worse, if it actually is?
+llm_skill   <- 0.899 # Just more than 5% worse. How many times wouuld we say that llm is not more than 5% worse, if it actually is?
 
 results <- data.frame()
 results.ml <- data.frame()
 true_difference_sim <- numeric()
 
-n_human_coders_per_report <- 2 # Number of humans coding each report
+n_human_coders_per_report <- 0.5 # Number of humans coding each report
 
-sd_difficulty <- 1 # Standard deviation for report difficulty (logit scale)
+sd_difficulty <- 4 # Standard deviation for report difficulty (logit scale)
 correlation_difficulty <- -0.2 # Correlation between human and LLM difficulty
 
 # NOTE: As the inherent human skill is very very close to one (see blow),
@@ -46,7 +46,7 @@ human_skill <- c(0.95, 0.95, 0.94, 0.93, 0.96, 0.97) #arithmetric mean = 0.95
 
 non_inferiority_margin <- 0.05
 equivalence_bounds <- c(-non_inferiority_margin, Inf) # Test H1: LLM - Human > -0.05
-n_reports <- 3000
+n_reports <- 300
 
 human_coder_ids <- paste0("human_", 1:n_human_coders_total)
 report_ids <- paste0("report_", 1:n_reports)
@@ -111,7 +111,7 @@ avg_p_actual_human_fixed <- mean(sim_setup_data$p_human[sim_setup_data$is_llm ==
 message(paste0("The (weighted) average human accuracy is ", round(avg_p_actual_human_fixed, digits = 3), " with an SD of ", round(sd(sim_setup_data$p_human[sim_setup_data$is_llm == 0]), digits = 3)))
 
 true_difference_fixed <- avg_p_actual_llm_fixed - avg_p_actual_human_fixed
-message(paste("Fixed True Average Difference (LLM - Human):", round(true_difference_fixed, 4)))
+message(paste("Fixed True Average Difference (LLM - Human):", round(true_difference_fixed, 4), ". In small sample sizes with large difficult SD on the logit scale, sampling error is large."))
 
 # Not exactly the values specified above, because not all humans extract same proportion of reports. 
 
