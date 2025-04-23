@@ -1,7 +1,7 @@
 library(tidyverse)
 library(marginaleffects)
 
-set.seed(2027)
+set.seed(122)
 
 n_sims <- 300
 llm_skill <- 0.899 # Use 0.899 to test type 1 error control # User 0.95 for power
