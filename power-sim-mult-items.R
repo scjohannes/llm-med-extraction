@@ -4,7 +4,7 @@ library(marginaleffects)
 set.seed(122)
 
 n_sims <- 300
-llm_skill <- 0.899 # Use 0.899 to test type 1 error control # User 0.95 for power
+llm_skill <- 0.899 # Use 0.899 to test type 1 error control # Use 0.95 for power
 
 results <- data.frame()
 results.ml <- data.frame()
@@ -18,7 +18,7 @@ n_human_coders_per_report <- 2 # Number of humans coding each report
 sd_difficulty <- 0.5
 correlation_difficulty <- -0.2 # Correlation between human and LLM difficulty
 
-# NOTE: As the inherent human skill is very very close to one (see blow),
+# NOTE: As the inherent human skill is assumed to be very close to one (see blow),
 # increasing the SD of the difficulty (this is on the logit scale), will cause
 # the overall accuracy to go down on the probability scale. Because large
 # positive values of the difficulty will only increase the accuracy on the
