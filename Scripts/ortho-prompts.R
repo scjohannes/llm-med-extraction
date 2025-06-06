@@ -11,6 +11,70 @@
 #' @export
 #' @importFrom ellmer chat_ollama chat_openai type_object type_boolean
 #'
+
+text <- "Anamnese Sturz Hand li und Hüfte  li Fragestellung Fraktur Beckenübersicht und Hüftgelenk links vom 18.01.2023 Handgelenk links vom 18.01.2023 Hand links vom 18.01.2023 Befund und Beurteilung Keine Vorbefunde. Beckenübersicht und Hüfte: Keine Frakturen. Artikulationen intakt. ISG Arthrose beidseits. Handgelenk und Hand links: Fraktur des Processus styloideus ulnaris mit Gelenkbeteiligung. Kleine Fragmente im Frakturspalt. Distale Radiusfraktur des Processus styloideus radii mit Gelenkbeteiligung. Proximale Gelenkflächen des Radiokarpalgelenks und des Ulnokarpalgelenks nicht intakt. Schrägfraktur des proximalen MC V mit geringer Einstauchung. Mutmasslich Intraartikuläre und mehrfragmentierte Fraktur."
+
+.DEFAULT_MODEL = "llama3.3:70b-anweisung-q5_K_M"
+
+.DEFAULT_MODEL_OPTIONS = 
+  list(
+  temperature = 0,
+  num_ctx = 10000
+)
+
+.DEFAULT_BASE_URL = "http://rndapollolp01.uhbs.ch:11434"
+
+is_report_relevant <-
+  function(
+    text,
+    model = .DEFAULT_MODEL,
+    model_options = .DEFAULT_MODEL_OPTIONS)
+  {
+    type_report_relevant_check = 
+      ellmer::type_object(
+        is_relevant = ellmer::type_boolean("Image report relevant for evaluation of distal radius fractures?")
+    )
+    question <- "
+  Consider you are a medical expert in reading imaging reports written in German.
+  
+  Please, indicate whether the imaging report is relevant for the assessment of the diagnosis of a distal radius fracture OR for the evaluation of the outcome of an open reduction internal fixation procedure. 
+  
+  If you think the imaging report can be used, select TRUE, otherwise select FALSE.
+  
+  The imaging report starts below:
+    
+    "
+    
+#   if (base_url == Sys.getenv("usb_ollama_api_2")) {
+#     chat <- ellmer::chat_openai(
+#     system_prompt = question,
+#     base_url = base_url,
+#     model = model,
+#     api_args = model_options,
+#     api_key = Sys.getenv("OLLAMA_API_KEY"),
+#   )
+# } else {
+  # Initialize chat with the model
+  chat <- ellmer::chat_ollama(
+    system_prompt = "You are a highly trained medical AI assistant specialized in reading imaging reports in orthopedics and traumatology.",
+    base_url = base_url,
+    model = model,
+    api_args = model_options
+  )
+# }
+
+# Extract and return structured data
+tryCatch(
+  { prompt = paste0(question, text)
+    result <- chat$chat_structured(prompt, type = type_report_relevant_check)
+    return(result$is_relevant)
+  },
+  error = function(e) {
+    return(e$message)
+  }
+)
+}
+
 is_cancer_diagnosis <- function(
   text,
   model = .DEFAULT_MODEL,
