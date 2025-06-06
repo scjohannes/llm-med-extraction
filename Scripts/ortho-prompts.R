@@ -16,11 +16,11 @@ text <- "Anamnese Sturz Hand li und Hüfte  li Fragestellung Fraktur Beckenüber
 
 .DEFAULT_MODEL = "llama3.3:70b-anweisung-q5_K_M"
 
-.DEFAULT_MODEL_OPTIONS = 
+.DEFAULT_MODEL_OPTIONS =
   list(
-  temperature = 0,
-  num_ctx = 10000
-)
+    temperature = 0,
+    num_ctx = 10000
+  )
 
 .DEFAULT_BASE_URL = "http://rndapollolp01.uhbs.ch:11434"
 
@@ -28,12 +28,14 @@ is_report_relevant <-
   function(
     text,
     model = .DEFAULT_MODEL,
-    model_options = .DEFAULT_MODEL_OPTIONS)
-  {
-    type_report_relevant_check = 
+    model_options = .DEFAULT_MODEL_OPTIONS
+  ) {
+    type_report_relevant_check <-
       ellmer::type_object(
-        is_relevant = ellmer::type_boolean("Image report relevant for evaluation of distal radius fractures?")
-    )
+        is_relevant = ellmer::type_boolean(
+          "Image report relevant for evaluation of distal radius fractures?"
+        )
+      )
     question <- "
   Consider you are a medical expert in reading imaging reports written in German.
   
@@ -44,36 +46,40 @@ is_report_relevant <-
   The imaging report starts below:
     
     "
-    
-#   if (base_url == Sys.getenv("usb_ollama_api_2")) {
-#     chat <- ellmer::chat_openai(
-#     system_prompt = question,
-#     base_url = base_url,
-#     model = model,
-#     api_args = model_options,
-#     api_key = Sys.getenv("OLLAMA_API_KEY"),
-#   )
-# } else {
-  # Initialize chat with the model
-  chat <- ellmer::chat_ollama(
-    system_prompt = "You are a highly trained medical AI assistant specialized in reading imaging reports in orthopedics and traumatology.",
-    base_url = base_url,
-    model = model,
-    api_args = model_options
-  )
-# }
 
-# Extract and return structured data
-tryCatch(
-  { prompt = paste0(question, text)
-    result <- chat$chat_structured(prompt, type = type_report_relevant_check)
-    return(result$is_relevant)
-  },
-  error = function(e) {
-    return(e$message)
+    #   if (base_url == Sys.getenv("usb_ollama_api_2")) {
+    #     chat <- ellmer::chat_openai(
+    #     system_prompt = question,
+    #     base_url = base_url,
+    #     model = model,
+    #     api_args = model_options,
+    #     api_key = Sys.getenv("OLLAMA_API_KEY"),
+    #   )
+    # } else {
+    # Initialize chat with the model
+    chat <- ellmer::chat_ollama(
+      system_prompt = "You are a highly trained medical AI assistant specialized in reading imaging reports in orthopedics and traumatology.",
+      base_url = base_url,
+      model = model,
+      api_args = model_options
+    )
+    # }
+
+    prompt <- paste0(question, text)
+    # Extract and return structured data
+    tryCatch(
+      {
+        result <- chat$chat_structured(
+          prompt,
+          type = type_report_relevant_check
+        )
+        return(result$is_relevant)
+      },
+      error = function(e) {
+        return(e$message)
+      }
+    )
   }
-)
-}
 
 is_cancer_diagnosis <- function(
   text,
