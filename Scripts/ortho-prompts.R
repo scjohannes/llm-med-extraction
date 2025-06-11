@@ -83,6 +83,7 @@ is_report_relevant <-
     )
   }
 
+<<<<<<< HEAD
 is_report_relevant(text)
 
 is_cancer_diagnosis <- function(
@@ -142,6 +143,8 @@ is_cancer_diagnosis <- function(
 }
 
 
+=======
+>>>>>>> 1673cf6a06b8e1346290b0a19e334985d93d4096
 #' Extract high-level term, vague, Cancer Diagnosis Information from Medical Text
 #'
 #' Function to process medical text and extract the primary diagnosis
