@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 #' Determine if Text Contains a Cancer Diagnosis
 #'
 #' Internal function to process diagnosis text and determine if it contains
@@ -14,8 +13,6 @@
 
 library(ellmer)
 
-=======
->>>>>>> c9a01a59cabaf51174d7af3ac3723ae09f6eb0ed
 text <- "Anamnese Sturz Hand li und Hüfte  li Fragestellung Fraktur Beckenübersicht und Hüftgelenk links vom 18.01.2023 Handgelenk links vom 18.01.2023 Hand links vom 18.01.2023 Befund und Beurteilung Keine Vorbefunde. Beckenübersicht und Hüfte: Keine Frakturen. Artikulationen intakt. ISG Arthrose beidseits. Handgelenk und Hand links: Fraktur des Processus styloideus ulnaris mit Gelenkbeteiligung. Kleine Fragmente im Frakturspalt. Distale Radiusfraktur des Processus styloideus radii mit Gelenkbeteiligung. Proximale Gelenkflächen des Radiokarpalgelenks und des Ulnokarpalgelenks nicht intakt. Schrägfraktur des proximalen MC V mit geringer Einstauchung. Mutmasslich Intraartikuläre und mehrfragmentierte Fraktur."
 
 .DEFAULT_MODEL = "llama3.3:70b-instruct-q5_K_M"
@@ -108,7 +105,6 @@ fx_description <-
   function(
     text,
     model = .DEFAULT_MODEL,
-<<<<<<< HEAD
     model_options = .DEFAULT_MODEL_OPTIONS) 
     {
     question = 
@@ -170,9 +166,3 @@ fx_description <-
       }
     )
   }
-
-fx_description(text)
-=======
-    model_options = .DEFAULT_MODEL_OPTIONS
-  ) {}
->>>>>>> c9a01a59cabaf51174d7af3ac3723ae09f6eb0ed
