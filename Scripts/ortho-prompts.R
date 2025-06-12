@@ -84,12 +84,11 @@ is_report_relevant <-
     )
   }
 
-is_report_relevant(text)
+result <- is_report_relevant(text)
 
 fx_description <-
   function(
     text,
     model = .DEFAULT_MODEL,
     model_options = .DEFAULT_MODEL_OPTIONS
-  ) {
-  }
+  ) {}
