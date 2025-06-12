@@ -1,17 +1,3 @@
-#' Determine if Text Contains a Cancer Diagnosis
-#'
-#' Internal function to process diagnosis text and determine if it contains
-#' a cancer diagnosis using a large language model.
-#'
-#' @param text Character string containing the diagnosis text
-#' @param model Specifies the LLM to use for the classification. Default: "llama3.3:70b-instruct-q5_K_M"
-#' @param model_options List of parameters to pass to the model (default: list(num_ctx = 10000, temperature = 0))
-#' @param base_url Specifies the url which points to the ollama instance.
-#' @return Boolean: TRUE if cancer diagnosis, FALSE if not
-#' @export
-#' @importFrom ellmer chat_ollama chat_openai type_object type_boolean
-#'
-
 text <- "Anamnese Sturz Hand li und Hüfte  li Fragestellung Fraktur Beckenübersicht und Hüftgelenk links vom 18.01.2023 Handgelenk links vom 18.01.2023 Hand links vom 18.01.2023 Befund und Beurteilung Keine Vorbefunde. Beckenübersicht und Hüfte: Keine Frakturen. Artikulationen intakt. ISG Arthrose beidseits. Handgelenk und Hand links: Fraktur des Processus styloideus ulnaris mit Gelenkbeteiligung. Kleine Fragmente im Frakturspalt. Distale Radiusfraktur des Processus styloideus radii mit Gelenkbeteiligung. Proximale Gelenkflächen des Radiokarpalgelenks und des Ulnokarpalgelenks nicht intakt. Schrägfraktur des proximalen MC V mit geringer Einstauchung. Mutmasslich Intraartikuläre und mehrfragmentierte Fraktur."
 
 .DEFAULT_MODEL = "llama3.3:70b-instruct-q5_K_M"
@@ -24,6 +10,16 @@ text <- "Anamnese Sturz Hand li und Hüfte  li Fragestellung Fraktur Beckenüber
 
 .DEFAULT_BASE_URL = "http://rndapollolp01.uhbs.ch:11434"
 
+#' Determine if imaging report is relevant for evaluation of distal radius
+#'
+#' @param text Character string containing the imaging report text
+#' @param model Specifies the LLM to use for the classification. Default: "llama3.3:70b-instruct-q5_K_M"
+#' @param model_options List of parameters to pass to the model (default: list(num_ctx = 10000, temperature = 0))
+#' @param base_url Specifies the url which points to the ollama instance.
+#' @return Boolean: TRUE if cancer diagnosis, FALSE if not
+#' @export
+#' @importFrom ellmer chat_ollama chat_openai type_object type_boolean
+#'
 is_report_relevant <-
   function(
     text,
@@ -36,7 +32,7 @@ is_report_relevant <-
           "Image report relevant for evaluation of distal radius fractures?"
         )
       )
-    
+
     question <- "
   Consider you are a medical expert in reading imaging reports written in German.
   
@@ -58,17 +54,17 @@ is_report_relevant <-
     #   )
     # } else {
     # Initialize chat with the model
-    chat <- 
+    chat <-
       ellmer::chat_ollama(
         system_prompt = "You are a highly trained medical AI assistant specialized in reading imaging reports in orthopedics and traumatology.",
         base_url = .DEFAULT_BASE_URL,
         model = model,
         api_args = model_options
-        )
+      )
     # }
 
     prompt <- paste0(question, text)
-    
+
     # Extract and return structured data
     tryCatch(
       {
@@ -76,7 +72,11 @@ is_report_relevant <-
           prompt,
           type = type_report_relevant_check
         )
-        return(result$is_relevant)
+        if (result$is_relevant) {
+          return(chat) #return the chat object to move on to next question
+        } else {
+          return(result$is_relevant)
+        }
       },
       error = function(e) {
         return(e$message)
@@ -86,10 +86,10 @@ is_report_relevant <-
 
 is_report_relevant(text)
 
-fx_description <- 
+fx_description <-
   function(
     text,
     model = .DEFAULT_MODEL,
-    model_options = .DEFAULT_MODEL_OPTIONS) {
-    
+    model_options = .DEFAULT_MODEL_OPTIONS
+  ) {
   }
