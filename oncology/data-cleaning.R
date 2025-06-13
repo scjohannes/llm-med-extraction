@@ -15,7 +15,7 @@ data <- data |>
     pet_ct = PET_CT
   ) |>
   select(-c(PAT_BK, IET_DICOM_MODALITY, IMRI_BEGIN_DATE_TS, IET_BK)) |>
-  slice_sample(n = 20) |>
+  slice_sample(n = 20) |> # 20 reports for beta testing of REDCap functionality.
   group_by(ier_bk) |>
   mutate(
     redcap_event_name = list(c("extraction_1_arm_1", "extraction_2_arm_1"))
