@@ -1,15 +1,13 @@
 library(ellmer)
+library(tidyverse)
 
-text <- "Anamnese Sturz Hand li und Hüfte  li Fragestellung Fraktur Beckenübersicht und Hüftgelenk links vom 18.01.2023 Handgelenk links vom 18.01.2023 Hand links vom 18.01.2023 Befund und Beurteilung Keine Vorbefunde. Beckenübersicht und Hüfte: Keine Frakturen. Artikulationen intakt. ISG Arthrose beidseits. Handgelenk und Hand links: Fraktur des Processus styloideus ulnaris mit Gelenkbeteiligung. Kleine Fragmente im Frakturspalt. Distale Radiusfraktur des Processus styloideus radii mit Gelenkbeteiligung. Proximale Gelenkflächen des Radiokarpalgelenks und des Ulnokarpalgelenks nicht intakt. Schrägfraktur des proximalen MC V mit geringer Einstauchung. Mutmasslich Intraartikuläre und mehrfragmentierte Fraktur."
 
 .DEFAULT_MODEL = "llama3.3:70b-instruct-q5_K_M"
-
 .DEFAULT_MODEL_OPTIONS =
   list(
     temperature = 0,
     num_ctx = 10000
   )
-
 .DEFAULT_BASE_URL = "http://rndapollolp01.uhbs.ch:11434"
 
 #' Determine if imaging report is relevant for evaluation of distal radius
@@ -18,7 +16,7 @@ text <- "Anamnese Sturz Hand li und Hüfte  li Fragestellung Fraktur Beckenüber
 #' @param model Specifies the LLM to use for the classification. Default: "llama3.3:70b-instruct-q5_K_M"
 #' @param model_options List of parameters to pass to the model (default: list(num_ctx = 10000, temperature = 0))
 #' @param base_url Specifies the url which points to the ollama instance.
-#' @return Boolean: TRUE if cancer diagnosis, FALSE if not
+#' @return A list contaning the answer (TRUE/FALSE) and the chat object.
 #' @export
 #' @importFrom ellmer chat_ollama chat_openai type_object type_boolean
 #'
@@ -74,14 +72,19 @@ is_report_relevant <-
           prompt,
           type = type_report_relevant_check
         )
-        if (result$is_relevant) {
-          return(chat) #return the chat object to move on to next question
-        } else {
-          return(result$is_relevant)
-        }
+
+        return(list(
+          is_relevant = result$is_relevant,
+          chat_object = chat
+        ))
       },
       error = function(e) {
-        return(e$message)
+        warning("Error during chat_structured: ", e$message)
+        return(list(
+          is_relevant = NA,
+          chat_object = chat, # Still return the chat object even if no structured response was obtained
+          error_message = e$message
+        ))
       }
     )
   }
@@ -227,10 +230,110 @@ fx_description_object <-
     tryCatch(
       {
         result <- chat_input$chat_structured(prompt, type = type_fx_desc)
-        return(result)
+
+        return(list(
+          extracted_data = result,
+          chat_object = chat_input # Return the same chat object passed in
+        ))
       },
       error = function(e) {
-        return(e$message)
+        # In case of an error, return a list with NA values for the expected fields
+        # and include the chat_object and error message.
+        warning(
+          "Error during chat_structured in fx_description_object: ",
+          e$message
+        )
+        return(list(
+          extracted_data = list(
+            # List with NA values for each field
+            multiple_inj = NA_character_, # Use NA_character_ for enum types
+            fracture_etio = NA_character_,
+            fracture_open = NA_character_
+          ),
+          chat_object = chat_input, # Still return the chat object
+          error_message = e$message
+        ))
       }
     )
   }
+
+#' Process an imaging report to determine relevance and extract fracture details.
+#'
+#' This function first checks if an imaging report is relevant for distal radius
+#' fracture evaluation. If it is, it proceeds to extract detailed fracture
+#' descriptions. The results are combined into a single list.
+#'
+#' @param text Character string containing the imaging report text.
+#' @param model Specifies the LLM to use for classification. Default: .DEFAULT_MODEL
+#' @param model_options List of parameters to pass to the model (default: .DEFAULT_MODEL_OPTIONS)
+#' @return A list containing extracted fracture details and the relevance status.
+#'   If relevant, it includes 'multiple_inj', 'fracture_etio', 'fracture_open'
+#'   (from LLM) and 'is_relevant' (TRUE).
+#'   If not relevant or an error occurs, it returns a list with 'is_relevant' (FALSE)
+#'   and NA values for other fields.
+#' @export
+#' @importFrom ellmer chat_ollama chat_openai type_object type_boolean type_enum
+#'
+process_radial_xray <- function(
+  text,
+  model = .DEFAULT_MODEL,
+  model_options = .DEFAULT_MODEL_OPTIONS
+) {
+  # Step 1: Check if the report is relevant
+  relevance_output <- is_report_relevant(
+    text = text,
+    model = model,
+    model_options = model_options
+  )
+
+  # Check if the report was deemed relevant or if an error occurred during relevance check
+  if (relevance_output$is_relevant) {
+    # If relevant, proceed to extract fracture description
+    desc_output <- fx_description_object(
+      chat_input = relevance_output$chat_object
+    )
+
+    # Check if there was an error during description extraction
+    if (!is.null(desc_output$error_message)) {
+      warning(
+        "Error during fracture description extraction, returning NA values: ",
+        desc_output$error_message
+      )
+      # Return a list with relevant set to TRUE, but NA for other fields due to extraction error
+      return(list(
+        is_relevant = TRUE, # Report was relevant, but extraction failed
+        multiple_inj = NA_character_,
+        fracture_etio = NA_character_,
+        fracture_open = NA_character_,
+        extraction_error = desc_output$error_message # Include the specific error message
+      ))
+    } else {
+      # If description extraction was successful, combine and return
+      final_result <- desc_output$extracted_data
+      final_result$is_relevant <- relevance_output$is_relevant # Add the relevance flag
+      return(final_result)
+    }
+  } else {
+    # If not relevant (or error during relevance check), return consistent NA structure
+    if (!is.null(relevance_output$error_message)) {
+      warning(
+        "Error during report relevance check, returning FALSE and NA values: ",
+        relevance_output$error_message
+      )
+      return(list(
+        is_relevant = NA,
+        multiple_inj = NA_character_,
+        fracture_etio = NA_character_,
+        fracture_open = NA_character_,
+        relevance_check_error = relevance_output$error_message # Include error from relevance check
+      ))
+    } else {
+      return(list(
+        is_relevant = FALSE,
+        multiple_inj = NA_character_,
+        fracture_etio = NA_character_,
+        fracture_open = NA_character_
+      ))
+    }
+  }
+}
