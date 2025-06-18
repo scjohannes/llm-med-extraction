@@ -36,9 +36,9 @@ data <- data_raw |>
   ungroup() |>
   data.frame()
 
-# REDCapR::redcap_write(
-#   data,
-#   token = Sys.getenv("llm_radiology_project_api"),
-#   redcap_uri = Sys.getenv("redcap_url_fxdb"),
-#   overwrite_with_blanks = FALSE
-# )
+REDCapR::redcap_write(
+  data,
+  token = Sys.getenv("llm_radiology_project_api"),
+  redcap_uri = Sys.getenv("redcap_url_fxdb"),
+  overwrite_with_blanks = FALSE
+)
