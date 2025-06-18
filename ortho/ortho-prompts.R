@@ -86,7 +86,6 @@ is_report_relevant <-
     )
   }
 
-result <- is_report_relevant(text)
 
 fx_description <-
   function(
@@ -167,8 +166,6 @@ fx_description <-
     )
   }
 
-fx_description(text)
-
 
 fx_description_object <-
   function(
@@ -237,8 +234,3 @@ fx_description_object <-
       }
     )
   }
-
-fx_description(text)
-
-chat <- is_report_relevant(text)
-fx_description_object(chat)
