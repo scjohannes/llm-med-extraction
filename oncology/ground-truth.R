@@ -2,7 +2,9 @@
 
 # Load packages
 library(REDCapR)
+library(redcap)
 library(tidyverse)
+library(glue)
 
 # Import data
 
@@ -10,6 +12,12 @@ data <- redcap_read(
   redcap_uri = Sys.getenv("redcap_fxdb_url"),
   token = Sys.getenv("llm_radio_api"),
   raw_or_label = "label"
+)$data
+
+data_raw <- redcap_read(
+  redcap_uri = Sys.getenv("redcap_fxdb_url"),
+  token = Sys.getenv("llm_radio_api"),
+  raw_or_label = "raw"
 )$data
 
 wide_data <- data |>
@@ -75,4 +83,54 @@ ground_truth <- wide_data |>
       )
   )
 
-# write_csv(ground_truth, file = "test.csv")
+training_indicator <- data |> select(ier_bk, training) |> distinct()
+
+
+# --- Data where human reviewers agreed on everything
+
+ground_truth_agreement <- ground_truth |>
+  filter(if_all(everything(), ~ . != 9999 | is.na(.))) |>
+  select(-ends_with("_A"), -ends_with("_B")) |>
+  rename_with(~ str_remove(., "_ground_truth$")) |>
+  mutate(
+    redcap_event_name = "Ground Truth",
+    oncology_radiology_extraction_complete = 2,
+  ) |>
+  left_join(training_indicator, by = "ier_bk") |>
+  mutate(across(where(is.character), ~ na_if(., "NA")))
+
+# automatically recode labels to raw
+conn <- rconn(
+  url = Sys.getenv("redcap_fxdb_url"),
+  token = Sys.getenv("llm_radio_api")
+)
+project_dictionary <- meta_dictionary(conn)
+
+raw_data <- recode_labels(
+  x = ground_truth_agreement,
+  conn = conn,
+  dict = project_dictionary,
+  convert_to = "values"
+) |>
+  mutate(pet_ct = if_else(pet_ct == TRUE, 1, 0))
+
+
+# we need to split according to body_region and pet_ct, because we can't import
+# NA values for some reason
+
+list_of_groups <- raw_data |>
+  group_by(body_region, pet_ct) |>
+  group_split()
+
+list_to_import <- list_of_groups |>
+  map(~ .x |> select(where(~ !all(is.na(.)))))
+
+
+for (i in 1:length(list_to_import)) {
+  write_csv(
+    list_to_import[[i]],
+    glue("./output/agreement/auto-consolidated_{today}_{i}.csv")
+  )
+}
+
+# section for consolidated data by third reviewer
