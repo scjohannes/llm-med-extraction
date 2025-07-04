@@ -14,12 +14,6 @@ data <- redcap_read(
   raw_or_label = "label"
 )$data
 
-data_raw <- redcap_read(
-  redcap_uri = Sys.getenv("redcap_fxdb_url"),
-  token = Sys.getenv("llm_radio_api"),
-  raw_or_label = "raw"
-)$data
-
 wide_data <- data |>
   filter(
     redcap_event_name == "Extraction 1" |
@@ -104,6 +98,7 @@ conn <- rconn(
   url = Sys.getenv("redcap_fxdb_url"),
   token = Sys.getenv("llm_radio_api")
 )
+
 project_dictionary <- meta_dictionary(conn)
 
 raw_data <- recode_labels(
@@ -116,7 +111,8 @@ raw_data <- recode_labels(
 
 
 # we need to split according to body_region and pet_ct, because we can't import
-# NA values for some reason
+# NA values for some reason, so we have remove columns which are hidden
+# depending on pet-ct and body_region
 
 list_of_groups <- raw_data |>
   group_by(body_region, pet_ct) |>
@@ -125,12 +121,23 @@ list_of_groups <- raw_data |>
 list_to_import <- list_of_groups |>
   map(~ .x |> select(where(~ !all(is.na(.)))))
 
+today <- Sys.Date()
 
 for (i in 1:length(list_to_import)) {
-  write_csv(
-    list_to_import[[i]],
-    glue("./output/agreement/auto-consolidated_{today}_{i}.csv")
-  )
+  if (
+    all(list_to_import[[i]]$redcap_event_name == "ground_truth_arm_1") == TRUE
+  ) {
+    REDCapR::redcap_write(
+      list_to_import[[i]],
+      overwrite_with_blanks = FALSE,
+      redcap_uri = Sys.getenv("redcap_fxdb_url"),
+      token = Sys.getenv("llm_radio_api")
+    )
+    write_csv(
+      list_to_import[[i]],
+      glue("./output/oncology/cons-ground-truth/auto-cons/{today}_{i}.csv")
+    )
+  } else {
+    warning("Data would have overwritten non-ground-ground data. Not uploaded.")
+  }
 }
-
-# section for consolidated data by third reviewer
