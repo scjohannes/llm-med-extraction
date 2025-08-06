@@ -5,6 +5,8 @@ library(REDCapR)
 library(redcap)
 library(tidyverse)
 library(glue)
+library(readr)
+library(fs)
 
 # Import data
 
@@ -140,4 +142,55 @@ for (i in 1:length(list_to_import)) {
   } else {
     warning("Data would have overwritten non-ground-ground data. Not uploaded.")
   }
+}
+
+
+# Export data where human reviewers did not aggree
+unconsolidated <- data |>
+  filter(!(ier_bk %in% raw_data$ier_bk))
+
+# Get list of already exported ier_bks and determine next chunk number
+uncons_output_dir <- "./output/oncology/uncons-ground-truth"
+existing_ier_bks <- c()
+next_chunk_number <- 1
+
+if (dir.exists(uncons_output_dir)) {
+  existing_files <- dir_ls(
+    uncons_output_dir,
+    glob = "*/data_chunk_*.csv",
+    recurse = TRUE
+  )
+  if (length(existing_files) > 0) {
+    existing_ier_bks <- map_df(
+      existing_files,
+      ~ read_csv(.x, col_types = cols(ier_bk = col_character())) |>
+        select(ier_bk)
+    ) |>
+      distinct(ier_bk) |>
+      pull(ier_bk)
+
+    last_chunk_number <- existing_files |>
+      str_extract("data_chunk_(\\d{3})\\.csv") |>
+      str_replace_all(c("data_chunk_" = "", "\\.csv" = "")) |>
+      as.numeric() |>
+      max()
+    next_chunk_number <- last_chunk_number + 1
+  }
+}
+
+unconsolidated <- unconsolidated |>
+  filter(!(ier_bk %in% existing_ier_bks))
+
+# Export data in chunks
+
+# Split unconsolidated into chunks of 10
+unconsolidated_chunks <- unconsolidated |>
+  group_by((row_number() - 1) %/% 10) |>
+  group_split()
+
+# Write each chunk to a CSV file
+for (i in seq_along(unconsolidated_chunks)) {
+  chunk_number_padded <- str_pad(next_chunk_number + i - 1, 3, pad = "0")
+  file_name <- glue("{uncons_output_dir}/data_chunk_{chunk_number_padded}.csv")
+  write_csv(unconsolidated_chunks[[i]], file_name)
 }
