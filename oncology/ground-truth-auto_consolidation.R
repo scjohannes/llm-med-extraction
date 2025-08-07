@@ -16,6 +16,7 @@ data <- redcap_read(
   raw_or_label = "label"
 )$data
 
+# Format as wide dataset
 wide_data <- data |>
   filter(
     redcap_event_name == "Extraction 1" |
@@ -145,8 +146,9 @@ for (i in 1:length(list_to_import)) {
 }
 
 
-# Export data where human reviewers did not aggree
-unconsolidated <- data |>
+# Export data where human reviewers did not aggree ----------------
+
+unconsolidated <- ground_truth |>
   filter(!(ier_bk %in% raw_data$ier_bk))
 
 # Get list of already exported ier_bks and determine next chunk number
@@ -192,5 +194,8 @@ unconsolidated_chunks <- unconsolidated |>
 for (i in seq_along(unconsolidated_chunks)) {
   chunk_number_padded <- str_pad(next_chunk_number + i - 1, 3, pad = "0")
   file_name <- glue("{uncons_output_dir}/data_chunk_{chunk_number_padded}.csv")
-  write_csv(unconsolidated_chunks[[i]], file_name)
+  write_csv(
+    unconsolidated_chunks[[i]] |> select(-`(row_number() - 1)%/%10`),
+    file_name
+  )
 }
