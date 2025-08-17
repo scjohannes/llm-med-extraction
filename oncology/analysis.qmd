@@ -1,0 +1,572 @@
+---
+title: LLM-Extraction Project - Analysis
+author: "Johannes Schwenke"
+date: today
+format: 
+  typst:
+    papersize: a4
+    margin:
+      x: 2cm
+      y: 2.5cm
+    toc: true
+    section-numbering: 1.1.1
+    columns: 1
+    tbl-cap-location: bottom
+---
+{{< pagebreak >}}
+
+```{r setup}
+#| echo: false
+#| output: false
+library(tidyverse)
+library(marginaleffects)
+library(REDCapR)
+library(lme4)
+library(brms)
+library(tinytable)
+```
+
+```{r download-data}
+#| echo: false
+#| output: false
+
+redownload <- FALSE
+
+if(redownload){
+  data <- redcap_read(
+    redcap_uri = Sys.getenv("redcap_fxdb_url"),
+    token = Sys.getenv("llm_radio_api"),
+    raw_or_label = "label"
+  )$data
+} else {
+  data <- readRDS("../data/oncology/redcap_export_complete.rds")
+}
+```
+
+```{r format-data}
+#| echo: false
+#| output: false
+long_data <- data |>
+  group_by(redcap_event_name) |>
+  pivot_longer(
+    cols = c(
+      primary_tumor,
+      bone_metastasis,
+      cns_metastasis,
+      meningeal_metastasis,
+      lung_metastasis,
+      pleural_metastasis,
+      adrenal_metastasis,
+      kidney_metastasis,
+      liver_metastasis,
+      spleen_metastasis,
+      pancreas_metastasis,
+      ovarian_metastasis,
+      peritoneal_metastasis,
+      lymph_node_metastasis,
+      soft_tissue_metastasis,
+      other_organ_metastasis,
+      no_tumor,
+      response_to_trt, 
+      response_to_trt_pet
+    ),
+    names_to = "item",
+    values_to = "value"
+  ) |> 
+  select(-c(oncology_radiology_extraction_complete, justification, model, prompt, sample_complete)) |> 
+  ungroup()
+
+ground_truth_long <- long_data |> 
+    filter(redcap_event_name == "Ground Truth") |> 
+    select(ier_bk, item, truth = value)
+
+analysis_data <- long_data |> 
+    filter(redcap_event_name != "Ground Truth") |> 
+    left_join(ground_truth_long, by = c("ier_bk", "item")) |> 
+    # where NA for ground truth and value, then question was not applicable -> remove
+    filter(!is.na(value) & !is.na(truth)) |> 
+    mutate(
+        correct = if_else(value == truth, 1, 0)
+    )
+
+if(any(is.na(analysis_data$value))) {
+    message("There are NA values in the long_data, which may affect analysis.")
+}
+```
+
+```{r add-md-label}
+#| echo: false
+#| output: false
+all_ids <- na.omit(unique(analysis_data$extractor_id))
+md <- c("DH", "AIM", "BT", "AMS")
+stud <- setdiff(all_ids, md)
+
+analysis_data <- analysis_data |> 
+  mutate(
+    human_group = case_when(
+      extractor_id %in% md ~ "MD",
+      extractor_id %in% stud ~ "Stud",
+      TRUE ~ "Unknown"
+    ),
+    body_region_grouped = fct_lump_n(body_region, n = 6, other_level = "Other"),
+    task  = case_when(
+      str_detect(item, "metastasis") ~ "Metastasis",
+      str_detect(item, "primary_tumor") ~ "Diagnosis",
+      str_detect(item, "response_to_trt") ~ "Response to Treatment",
+      str_detect(item, "no_tumor") ~ "Radiologically Tumor Free",
+      TRUE ~ NA
+    ),
+    #add the length of each report
+    report_length = nchar(imaging_report),
+  )
+```
+
+## Overview of the Data
+
+From how many imaging reports was data extracted? 
+```{r n-ier_bk}
+#| echo: false
+n_distinct(analysis_data$ier_bk)
+```
+
+How many items (data points) does our dataset contain?
+
+```{r n-data-points}
+#| echo: false
+nrow(analysis_data)
+```
+
+Extractors had four main tasks: Extraction of diagnosis, metastasis, response to treatment and radiological absence of a tumor. How many items were extracted per task?
+
+```{r tbl-n-per-task}
+#| echo: false
+analysis_data |> 
+  count(task, sort = TRUE) |> 
+  tt(width = 1)
+```
+
+What are the ten most common diagnoses?
+
+```{r tbl-diagnosis}
+#| echo: false
+analysis_data |> 
+  filter(task == "Diagnosis") |> 
+  select(ier_bk, truth) |> 
+  distinct() |> 
+  count(truth, sort = TRUE) |> 
+  head(10)  |> 
+  tt(width = 1)
+```
+
+How many PET-CT scans?
+
+```{r n-pet}
+#| echo: false
+analysis_data |> 
+  filter(pet_ct == TRUE) |>
+  select(ier_bk, pet_ct) |>
+  distinct() |> 
+  count() |> 
+  pull(n)
+```
+
+Of how many extracted metasis-location, did patients have a metastasis?
+```{r tbl-metastasis}
+#| echo: false
+analysis_data |> 
+  filter(task == "Metastasis") |>
+  count(value) |> 
+  tt(width = 1)
+```
+
+How many patients had response, stable disease or progression?
+
+```{r tbl-response-to-treatment}
+#| echo: false
+analysis_data |> 
+  group_by(pet_ct) |> 
+  filter(task == "Response to Treatment") |>
+  count(value) |> 
+  arrange(pet_ct, desc(n)) |> 
+  tt(width = 1)
+``` 
+
+How many extractions per extractor?
+
+```{r tbl-extractors}
+#| echo: false
+analysis_data |> 
+  group_by(extractor_id) |> 
+  summarise(
+    n = n(),
+    .groups = "drop"
+  ) |> 
+  arrange(desc(n)) |> 
+  tt(width = 1)
+```
+
+Did students and MDs extract different types of reports? 
+
+```{r tbl-extractor-x-region}
+#| echo: false
+analysis_data |> 
+  group_by(human_group, body_region_grouped) |> 
+  summarise(
+    n = n(),
+    .groups = "drop"
+  ) |> 
+  group_by(human_group) |> 
+  mutate(
+    prop = round(n / sum(n), digits = 2) 
+  ) |> 
+    select(-n) |>
+  pivot_wider(
+    names_from = human_group,
+    values_from = prop
+  ) |> 
+  mutate(
+    diff = MD - Stud,
+  ) |> 
+  arrange(body_region_grouped) |> 
+  tt(width = 1)
+```
+
+Did one group extract longer vs shorter reports?
+
+```{r tbl-report-length}
+#| echo: false
+analysis_data |> 
+  group_by(human_group) |> 
+  summarise(
+    mean_report_length = mean(report_length, na.rm = TRUE),
+    sd_report_length = sd(report_length, na.rm = TRUE),
+    .groups = "drop"
+  ) |> 
+    tt(width = 1)
+```
+
+{{< pagebreak >}}
+
+## Human Performance
+
+### Overall and Task Accuracy
+
+Model used for overall accuracy. We use cluster robust standard errors when making predictions.
+
+```{r}
+# accuracy
+model_acc <- glm(
+    correct ~ task * pet_ct,
+    data = analysis_data,
+    family = binomial(link = "logit")
+  )
+
+summary(model_acc)
+```
+
+What is the overall accuracy across all tasks?
+```{r}
+# Overall Accuracy
+avg_predictions(model_acc, type = "response", vcov = ~ier_bk)
+```
+
+What is the accuracy by task?
+```{r}
+#| echo: false
+#| output: false
+
+# Accuracy by Task
+avg_predictions(model_acc, by = "task", type = "response", vcov = ~ier_bk)
+avg_predictions(model_acc, by = c("task", "pet_ct"), type = "response", vcov = ~ier_bk)
+```
+
+```{r fig-task-accuracy-all}
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "Accuracy by task"
+plot_predictions(model_acc, by = "task", type = "response", vcov = ~ier_bk) + 
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(
+    x = "Task",
+    y = "Predicted Probability of Correct Response"
+  ) 
+```
+
+Does the accuracy differ between PET-CT and non-PET-CT scans?
+
+```{r fig-task-accuracy-pet-ct}
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "Accuracy by task and whether the imaging was a PET-CT scan or not."
+plot_predictions(model_acc, by = c("task", "pet_ct"), type = "response", vcov = ~ier_bk) + 
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(
+    x = "Task",
+    y = "Probability of Correct Response",
+    color = "PET-Scan"
+  ) +
+    theme(legend.position = "bottom")
+```
+
+After here omitting code that is used to generate plots from render.
+
+### Diagnosis Accuracy
+
+Model used for inference.
+
+```{r}
+model_acc_diag <- glm(
+    correct ~ value,
+    data = analysis_data |> filter(task == "Diagnosis") |> mutate(value = fct_lump_min(value, min = 10)),
+    family = binomial(link = "logit")
+  )
+```
+
+```{r}
+#| echo: false
+#| output: false
+avg_predictions(model_acc_diag, type = "response", vcov = ~ier_bk)
+```
+
+What's the accuracy by extracted diagnosis?
+
+```{r fig-diagnosis-accuracy}
+#| echo: false
+#| warning: false
+#| fig-width: 10
+#| fig-height: 6
+#| fig-cap: "Accuracy by Extractor Response for Diagnosis"
+
+# Accuracy by Extractor Response
+plot_predictions(model_acc_diag, by = "value", type = "response", vcov = ~ier_bk) + 
+  coord_flip() +
+  scale_y_continuous(limits = c(0, 1))
+```
+
+We need to examine what's going on with the 'No Malignant Disease', 'Kidney Tumor', and 'Gastric Cancer'.
+
+### Response to Treatment
+
+#### Accuracy
+
+Model used for non PET-CT scans
+
+```{r} 
+model_rsp_trt <- glm(
+    correct ~ value,
+    data = analysis_data |> filter(task == "Response to Treatment", pet_ct == FALSE),
+    family = binomial(link = "logit")
+  )
+
+summary(model_rsp_trt)
+```
+
+```{r}
+#| echo: false
+#| output: false
+
+# Overall Accuracy
+avg_predictions(model_rsp_trt, vcov = ~ier_bk)
+
+# Accuracy by Extractor Response
+avg_predictions(model_rsp_trt, by = "value", vcov = ~ier_bk)
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "Accuracy by Extractor Response for Response to Treatment (non-PET-CT scans)"
+plot_predictions(model_rsp_trt, by = "value", vcov = ~ier_bk) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.25))
+```
+
+Model used for PET-CT scans
+
+```{r}
+model_rsp_trt_pet <- glm(
+    correct ~ value,
+    data = analysis_data |> filter(task == "Response to Treatment", pet_ct == T),
+    family = binomial(link = "logit")
+  )
+
+summary(model_rsp_trt_pet)
+```
+
+```{r}
+#| echo: false
+#| output: false
+avg_predictions(model_rsp_trt_pet, vcov = ~ier_bk)
+avg_predictions(model_rsp_trt_pet, by = "value", vcov = ~ier_bk)
+```
+
+CI go above 1, which shouldn't happen. Maybe because of delta method used by `marginaleffects`?
+Stable Disease seems to have been impossible to extract correctly for PET-CT scans (?)
+```{r}
+#| echo: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 6
+# CI above 0, because of delta method? 
+plot_predictions(model_rsp_trt_pet, by = "value", vcov = ~ier_bk) +
+    scale_y_continuous(limits = c(-0.2, 1.1), breaks = seq(0, 1, by = 0.25))
+```
+
+#### PPV / NPV
+
+If someone extracts progression, how often is it really progression?
+
+```{r}
+model_progr_ppv <- glm(
+    truth ~ 1,
+    data = analysis_data |> filter(task == "Response to Treatment", value == "Progression") |> 
+      mutate(truth = if_else(truth == "Progression", 1, 0)),
+    family = binomial(link = "logit")
+  )
+
+summary(model_progr_ppv)
+
+# If someone extracts progression, how often is it really progression?
+avg_predictions(model_progr_ppv, type = "response", vcov = ~ier_bk)
+```
+
+If someone extracts stable disease or remission, how often is it NOT progression?
+
+```{r}
+model_progr_npv <- glm(
+    truth ~ 1,
+    data = analysis_data |> filter(task == "Response to Treatment", value != "Progression") |> 
+      mutate(truth = if_else(truth != "Progression", 1, 0)),
+    family = binomial(link = "logit")
+  )
+
+summary(model_progr_npv)
+
+# If some extracts something else than progression, how often is it really not progression?
+avg_predictions(model_progr_npv, type = "response", vcov = ~ier_bk)
+```
+
+### Metastasis
+
+#### Sensitivy and Specificty
+
+Model used for sensitivity and specificity analysis.
+
+```{r}
+model_meta_sens_spec <- glm(
+    correct ~ truth*pet_ct,
+    data = analysis_data |> filter(str_detect(item, "metastasis")) |> mutate(truth = if_else(truth == "Yes", "Sensitivity", "Specificity")),
+    family = binomial(link = "logit")
+  )
+summary(model_meta_sens_spec)
+```
+
+
+What's the sensitivity and specificity for metastasis detection?
+```{r}
+avg_predictions(model_meta_sens_spec, by = "truth", type = "response", vcov = ~ier_bk) 
+```
+
+Does this change for PET-CT vs non PET-CT scans?
+```{r fig-sens-spec-metasasis}
+#| echo: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "Sensitivity and Specificity for Metastasis Detection by PET-CT"
+
+
+# Does this change for PET-CT vs non PET-CT
+plot_predictions(model_meta_sens_spec, by = c("truth", "pet_ct"), type = "response", vcov = ~ier_bk) + 
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(
+    x = "",
+    y = "Predicted Probability",
+    color = "PET-Scan"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+#### Positive and Negative Predictive Value
+
+```{r}
+model_ppv_npv_simple <- glm(
+    truth ~ value,
+    data = analysis_data |> filter(task == "Metastasis") |> mutate(truth = if_else(truth == "Yes", 1, 0)),
+    family = binomial(link = "logit")
+  )
+
+summary(model_ppv_npv_simple)
+```
+
+If a humans extracts "Yes" or "No" respectively, what is the probability that it is really a metastasis?
+
+```{r}
+avg_predictions(model_ppv_npv_simple, by = "value", type = "response", vcov = ~ier_bk)
+```
+
+```{r}
+#| echo: false
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "Predictive Value for Metastasis Detection"
+plot_predictions(model_ppv_npv_simple, by = "value", type = "response", vcov = ~ier_bk) + 
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(
+    title = "",
+    x = "Extractor Response",
+    y = "Predicted Probability of a Metastasis"
+  )
+```
+
+```{r}
+#| echo: false
+#| output: false
+
+# Split into two different models that yield the same results
+model_ppv_simple <- glm(
+    truth ~ 1,
+    data = analysis_data |> filter(str_detect(item, "metastasis"), value == "Yes") |> mutate(truth = if_else(truth == "Yes", 1, 0)),
+    family = binomial(link = "logit")
+  )
+
+model_npv_simple <- glm(
+    truth ~ 1,
+    data = analysis_data |> filter(str_detect(item, "metastasis"), value == "No") |> mutate(truth = if_else(truth == "Yes", 1, 0)),
+    family = binomial(link = "logit")
+  )
+
+avg_predictions(model_ppv_simple, by = "value", type = "response", vcov = ~ier_bk)
+avg_predictions(model_npv_simple, type = "response", vcov = ~ier_bk, transform = function(x) 1 - x)
+```
+
+### Comparing Oncology-MDs vs Non-Oncology-MDs and Students
+
+```{r}
+# accuracy
+model_md_stud <- glm(
+    correct ~ human_group * (task + pet_ct + report_length),
+    data = analysis_data,
+    family = binomial(link = "logit")
+  )
+summary(model_md_stud)
+```
+
+Does the overall accuracy of oncologists vs non-oncologists differ?
+```{r}
+avg_predictions(model_md_stud, by = "human_group", variable = "human_group", type = "response", vcov = ~ier_bk)
+
+# test for difference (marginalize over pet_ct and report_length and task)
+avg_comparisons(model_md_stud, variable = "human_group", type = "response", vcov = ~ier_bk)
+```
+
+Does this vary by task?
+
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "Accuracy by Task and Human Group"
+#| echo: false
+plot_predictions(model_md_stud, by = c("task", "human_group"), variable = "human_group", type = "response", vcov = ~ier_bk)
+```
