@@ -24,6 +24,7 @@ library(REDCapR)
 library(lme4)
 library(brms)
 library(tinytable)
+library(irr)
 ```
 
 ```{r download-data}
@@ -247,6 +248,73 @@ analysis_data |>
 
 {{< pagebreak >}}
 
+## Inter-Rater Reliability 
+
+### Agreement
+
+```{r}
+#| echo: false
+paired_ratings <- analysis_data |>
+  # Select only the necessary columns
+  select(ier_bk, task, item, redcap_event_name, value) |>
+  # Pivot to wide format. This creates columns "Extraction 1" and "Extraction 2"
+  pivot_wider(
+    names_from = redcap_event_name,
+    values_from = value
+  ) |>
+  # Rename for easier use (avoids spaces in names)
+  rename(
+    rating_1 = `Extraction 1`,
+    rating_2 = `Extraction 2`
+  )
+
+# Overall agreement
+paired_ratings |> 
+  summarise(overall_agreement = mean(rating_1 == rating_2))
+
+# Agreement by task
+paired_ratings |> 
+  group_by(task) |> 
+  summarise(agreement = mean(rating_1 == rating_2))
+```
+
+
+### Cohen's Kappa
+
+```{r}
+#| echo: false
+#| warning: false
+#| tbl-cap: "Overall Inter-Rater Reliability (Cohen's Kappa)"
+kappa2(paired_ratings[, c("rating_1", "rating_2")], weight = "unweighted")
+```
+
+### Cohen's Kappa by task
+
+Note that because metastasis is very rare (< 10%), Cohen's Kappa is low, even though very high agreement.
+
+```{r}
+#| echo: false
+#| warning: false
+#| tbl-cap: "Cohen's Kappa for Inter-Rater Reliability by Task"
+
+# Group by task and apply the same simplified logic
+kappa_by_task <- paired_ratings |>
+  group_by(task) |>
+  nest() |>
+  mutate(
+    kappa = map_dbl(data, ~{
+      # Calculate kappa and return just the value
+      kappa2(.x[, c("rating_1", "rating_2")])$value
+    })
+  ) |>
+  select(task, kappa) |>
+  rename(`Cohen's Kappa` = kappa) |>
+  arrange(desc(`Cohen's Kappa`))
+
+# Display the results in a table
+tt(kappa_by_task, digits = 3)
+```
+
 ## Human Performance
 
 ### Overall and Task Accuracy
@@ -415,6 +483,23 @@ plot_predictions(model_rsp_trt_pet, by = "value", vcov = ~ier_bk) +
 
 #### PPV / NPV
 
+Confusion Matrix for Progression
+
+```{r}
+#| echo: false
+progression_datat <- analysis_data |> 
+  filter(task == "Response to Treatment") |> 
+  mutate(
+    truth = if_else(truth == "Progression", "Progression", "Other"),
+    value = if_else(value == "Progression", "Progression", "Other")
+  )
+
+table(
+  `Extracted` = progression_datat$value,
+  `Truth` = progression_datat$truth
+)
+```
+
 If someone extracts progression, how often is it really progression?
 
 ```{r}
@@ -450,6 +535,22 @@ avg_predictions(model_progr_npv, type = "response", vcov = ~ier_bk)
 ### Metastasis
 
 #### Sensitivy and Specificty
+
+Confusion Matrix
+
+```{r}
+#| echo: false
+
+# Filter for the metastasis task
+metastasis_data <- analysis_data |>
+  filter(task == "Metastasis")
+
+# Generate and print the confusion matrix
+table(
+  `Extracted` = metastasis_data$value,
+  `Truth` = metastasis_data$truth
+)
+```
 
 Model used for sensitivity and specificity analysis.
 
