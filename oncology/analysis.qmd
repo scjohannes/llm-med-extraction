@@ -31,7 +31,7 @@ library(irr)
 #| echo: false
 #| output: false
 
-redownload <- FALSE
+redownload <- TRUE
 
 if(redownload){
   data <- redcap_read(
@@ -74,7 +74,7 @@ long_data <- data |>
     names_to = "item",
     values_to = "value"
   ) |> 
-  select(-c(oncology_radiology_extraction_complete, justification, model, prompt, sample_complete)) |> 
+  select(-c(oncology_radiology_extraction_complete, justification, prompt, sample_complete)) |> 
   ungroup()
 
 ground_truth_long <- long_data |> 
@@ -87,10 +87,21 @@ analysis_data <- long_data |>
     # where NA for ground truth and value, then question was not applicable -> remove
     filter(!is.na(value) & !is.na(truth)) |> 
     mutate(
-        correct = if_else(value == truth, 1, 0)
+        correct = if_else(value == truth, 1, 0),
+        task  = case_when(
+          str_detect(item, "metastasis") ~ "Metastasis",
+          str_detect(item, "primary_tumor") ~ "Diagnosis",
+          str_detect(item, "response_to_trt") ~ "Response to Treatment",
+          str_detect(item, "no_tumor") ~ "Radiologically Tumor Free",
+          TRUE ~ NA
+        ),
+        report_length = nchar(imaging_report)
     )
 
-if(any(is.na(analysis_data$value))) {
+analysis_data_human <- analysis_data |> 
+  filter(!str_detect(redcap_event_name, "LLM"))
+
+if(any(is.na(analysis_data_human$value))) {
     message("There are NA values in the long_data, which may affect analysis.")
 }
 ```
@@ -98,11 +109,11 @@ if(any(is.na(analysis_data$value))) {
 ```{r add-md-label}
 #| echo: false
 #| output: false
-all_ids <- na.omit(unique(analysis_data$extractor_id))
+all_ids <- na.omit(unique(analysis_data_human$extractor_id))
 md <- c("DH", "AIM", "BT", "AMS")
 stud <- setdiff(all_ids, md)
 
-analysis_data <- analysis_data |> 
+analysis_data_human <- analysis_data_human |> 
   mutate(
     human_group = case_when(
       extractor_id %in% md ~ "MD",
@@ -110,15 +121,7 @@ analysis_data <- analysis_data |>
       TRUE ~ "Unknown"
     ),
     body_region_grouped = fct_lump_n(body_region, n = 6, other_level = "Other"),
-    task  = case_when(
-      str_detect(item, "metastasis") ~ "Metastasis",
-      str_detect(item, "primary_tumor") ~ "Diagnosis",
-      str_detect(item, "response_to_trt") ~ "Response to Treatment",
-      str_detect(item, "no_tumor") ~ "Radiologically Tumor Free",
-      TRUE ~ NA
-    ),
     #add the length of each report
-    report_length = nchar(imaging_report),
   )
 ```
 
@@ -127,21 +130,21 @@ analysis_data <- analysis_data |>
 From how many imaging reports was data extracted? 
 ```{r n-ier_bk}
 #| echo: false
-n_distinct(analysis_data$ier_bk)
+n_distinct(analysis_data_human$ier_bk)
 ```
 
 How many items (data points) does our dataset contain?
 
 ```{r n-data-points}
 #| echo: false
-nrow(analysis_data)
+nrow(analysis_data_human)
 ```
 
 Extractors had four main tasks: Extraction of diagnosis, metastasis, response to treatment and radiological absence of a tumor. How many items were extracted per task?
 
 ```{r tbl-n-per-task}
 #| echo: false
-analysis_data |> 
+analysis_data_human |> 
   count(task, sort = TRUE) |> 
   tt(width = 1)
 ```
@@ -150,7 +153,7 @@ What are the ten most common diagnoses?
 
 ```{r tbl-diagnosis}
 #| echo: false
-analysis_data |> 
+analysis_data_human |> 
   filter(task == "Diagnosis") |> 
   select(ier_bk, truth) |> 
   distinct() |> 
@@ -163,7 +166,7 @@ How many PET-CT scans?
 
 ```{r n-pet}
 #| echo: false
-analysis_data |> 
+analysis_data_human |> 
   filter(pet_ct == TRUE) |>
   select(ier_bk, pet_ct) |>
   distinct() |> 
@@ -174,7 +177,7 @@ analysis_data |>
 Of how many extracted metasis-location, did patients have a metastasis?
 ```{r tbl-metastasis}
 #| echo: false
-analysis_data |> 
+analysis_data_human |> 
   filter(task == "Metastasis") |>
   count(value) |> 
   tt(width = 1)
@@ -184,7 +187,7 @@ How many patients had response, stable disease or progression?
 
 ```{r tbl-response-to-treatment}
 #| echo: false
-analysis_data |> 
+analysis_data_human |> 
   group_by(pet_ct) |> 
   filter(task == "Response to Treatment") |>
   count(value) |> 
@@ -196,7 +199,7 @@ How many extractions per extractor?
 
 ```{r tbl-extractors}
 #| echo: false
-analysis_data |> 
+analysis_data_human |> 
   group_by(extractor_id) |> 
   summarise(
     n = n(),
@@ -210,7 +213,7 @@ Did students and MDs extract different types of reports?
 
 ```{r tbl-extractor-x-region}
 #| echo: false
-analysis_data |> 
+analysis_data_human |> 
   group_by(human_group, body_region_grouped) |> 
   summarise(
     n = n(),
@@ -236,7 +239,7 @@ Did one group extract longer vs shorter reports?
 
 ```{r tbl-report-length}
 #| echo: false
-analysis_data |> 
+analysis_data_human |> 
   group_by(human_group) |> 
   summarise(
     mean_report_length = mean(report_length, na.rm = TRUE),
@@ -254,7 +257,7 @@ analysis_data |>
 
 ```{r}
 #| echo: false
-paired_ratings <- analysis_data |>
+paired_ratings <- analysis_data_human |>
   # Select only the necessary columns
   select(ier_bk, task, item, redcap_event_name, value) |>
   # Pivot to wide format. This creates columns "Extraction 1" and "Extraction 2"
@@ -325,7 +328,7 @@ Model used for overall accuracy. We use cluster robust standard errors when maki
 # accuracy
 model_acc <- glm(
     correct ~ task * pet_ct,
-    data = analysis_data,
+    data = analysis_data_human,
     family = binomial(link = "logit")
   )
 
@@ -385,7 +388,7 @@ Model used for inference.
 ```{r}
 model_acc_diag <- glm(
     correct ~ value,
-    data = analysis_data |> filter(task == "Diagnosis") |> mutate(value = fct_lump_min(value, min = 10)),
+    data = analysis_data_human |> filter(task == "Diagnosis") |> mutate(value = fct_lump_min(value, min = 10)),
     family = binomial(link = "logit")
   )
 ```
@@ -422,7 +425,7 @@ Model used for non PET-CT scans
 ```{r} 
 model_rsp_trt <- glm(
     correct ~ value,
-    data = analysis_data |> filter(task == "Response to Treatment", pet_ct == FALSE),
+    data = analysis_data_human |> filter(task == "Response to Treatment", pet_ct == FALSE),
     family = binomial(link = "logit")
   )
 
@@ -455,7 +458,7 @@ Model used for PET-CT scans
 ```{r}
 model_rsp_trt_pet <- glm(
     correct ~ value,
-    data = analysis_data |> filter(task == "Response to Treatment", pet_ct == T),
+    data = analysis_data_human |> filter(task == "Response to Treatment", pet_ct == T),
     family = binomial(link = "logit")
   )
 
@@ -487,7 +490,7 @@ Confusion Matrix for Progression
 
 ```{r}
 #| echo: false
-progression_datat <- analysis_data |> 
+progression_datat <- analysis_data_human |> 
   filter(task == "Response to Treatment") |> 
   mutate(
     truth = if_else(truth == "Progression", "Progression", "Other"),
@@ -505,7 +508,7 @@ If someone extracts progression, how often is it really progression?
 ```{r}
 model_progr_ppv <- glm(
     truth ~ 1,
-    data = analysis_data |> filter(task == "Response to Treatment", value == "Progression") |> 
+    data = analysis_data_human |> filter(task == "Response to Treatment", value == "Progression") |> 
       mutate(truth = if_else(truth == "Progression", 1, 0)),
     family = binomial(link = "logit")
   )
@@ -521,7 +524,7 @@ If someone extracts stable disease or remission, how often is it NOT progression
 ```{r}
 model_progr_npv <- glm(
     truth ~ 1,
-    data = analysis_data |> filter(task == "Response to Treatment", value != "Progression") |> 
+    data = analysis_data_human |> filter(task == "Response to Treatment", value != "Progression") |> 
       mutate(truth = if_else(truth != "Progression", 1, 0)),
     family = binomial(link = "logit")
   )
@@ -542,7 +545,7 @@ Confusion Matrix
 #| echo: false
 
 # Filter for the metastasis task
-metastasis_data <- analysis_data |>
+metastasis_data <- analysis_data_human |>
   filter(task == "Metastasis")
 
 # Generate and print the confusion matrix
@@ -557,7 +560,7 @@ Model used for sensitivity and specificity analysis.
 ```{r}
 model_meta_sens_spec <- glm(
     correct ~ truth*pet_ct,
-    data = analysis_data |> filter(str_detect(item, "metastasis")) |> mutate(truth = if_else(truth == "Yes", "Sensitivity", "Specificity")),
+    data = analysis_data_human |> filter(str_detect(item, "metastasis")) |> mutate(truth = if_else(truth == "Yes", "Sensitivity", "Specificity")),
     family = binomial(link = "logit")
   )
 summary(model_meta_sens_spec)
@@ -594,7 +597,7 @@ plot_predictions(model_meta_sens_spec, by = c("truth", "pet_ct"), type = "respon
 ```{r}
 model_ppv_npv_simple <- glm(
     truth ~ value,
-    data = analysis_data |> filter(task == "Metastasis") |> mutate(truth = if_else(truth == "Yes", 1, 0)),
+    data = analysis_data_human |> filter(task == "Metastasis") |> mutate(truth = if_else(truth == "Yes", 1, 0)),
     family = binomial(link = "logit")
   )
 
@@ -628,13 +631,13 @@ plot_predictions(model_ppv_npv_simple, by = "value", type = "response", vcov = ~
 # Split into two different models that yield the same results
 model_ppv_simple <- glm(
     truth ~ 1,
-    data = analysis_data |> filter(str_detect(item, "metastasis"), value == "Yes") |> mutate(truth = if_else(truth == "Yes", 1, 0)),
+    data = analysis_data_human |> filter(str_detect(item, "metastasis"), value == "Yes") |> mutate(truth = if_else(truth == "Yes", 1, 0)),
     family = binomial(link = "logit")
   )
 
 model_npv_simple <- glm(
     truth ~ 1,
-    data = analysis_data |> filter(str_detect(item, "metastasis"), value == "No") |> mutate(truth = if_else(truth == "Yes", 1, 0)),
+    data = analysis_data_human |> filter(str_detect(item, "metastasis"), value == "No") |> mutate(truth = if_else(truth == "Yes", 1, 0)),
     family = binomial(link = "logit")
   )
 
@@ -648,7 +651,7 @@ avg_predictions(model_npv_simple, type = "response", vcov = ~ier_bk, transform =
 # accuracy
 model_md_stud <- glm(
     correct ~ human_group * (task + pet_ct + report_length),
-    data = analysis_data,
+    data = analysis_data_human,
     family = binomial(link = "logit")
   )
 summary(model_md_stud)
@@ -670,4 +673,58 @@ Does this vary by task?
 #| fig-cap: "Accuracy by Task and Human Group"
 #| echo: false
 plot_predictions(model_md_stud, by = c("task", "human_group"), variable = "human_group", type = "response", vcov = ~ier_bk)
+```
+
+## LLM vs Human in Prompt Optimization Sample
+
+```{r}
+optim_sample <- analysis_data |> 
+  group_by(ier_bk) |> 
+  filter(any(training == "Yes")) |> 
+  ungroup()
+
+optim_sample <- optim_sample |> 
+  mutate(
+    human = if_else(!str_detect(redcap_event_name, "LLM"), 1, 0),
+    grp = case_when(
+      human == 1 ~ "human",
+      model == "llama3.3:70b-instruct-q5_K_M" ~ "llama3.3:70b-instruct-q5_K_M",
+      model == "mistral-small:24b-instruct-2501-q4_K_M" ~ "mistral-small:24b-instruct-2501-q4_K_M",
+    ))
+```
+
+
+```{r}
+m_acc <- glm(
+    correct ~ grp * task,
+    data = optim_sample,
+    family = binomial(link = "logit")
+  )
+```
+
+Overall accuracy in the prompt optimization sample
+
+```{r}
+avg_predictions(m_acc, by = "grp", type = "response", vcov = ~ier_bk)
+avg_comparisons(m_acc, variable = "grp", type = "response", vcov = ~ier_bk)
+```
+
+Accuracy by task and group
+
+
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "Accuracy by Task and Group (Human vs LLM)"
+#| echo: false
+#| warning: false
+
+plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk) + 
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(
+    x = "Task",
+    y = "Predicted Probability of Correct Response",
+    color = ""
+  ) +
+  theme(legend.position = "bottom")
 ```
