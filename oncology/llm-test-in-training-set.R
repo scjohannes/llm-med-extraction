@@ -11,19 +11,26 @@ data <- redcap_read(
 )$data
 
 data <- data |>
-  filter(training == "Yes") |>
-  filter(redcap_event_name == "Ground Truth")
+  filter(training == "Yes", redcap_event_name == "Ground Truth") |>
+  dplyr::slice_head(n = 5)  
 
-model <- "llama3.3:70b-instruct-q5_K_M"
+models <- c("llama3.3:70b-instruct-q5_K_M", "mistral-small:24b-instruct-2501-q4_K_M", "rndcalcle01.qwen3:32b", "rndcalcle01.qwq:32b") 
 base_url <- Sys.getenv("usb_ollama_api_2")
-redcap_event_name <- "llm_999_arm_1"
+redcap_event_name <- c("llm_1_arm_1", "llm_2_arm_1", "llm_3_arm_1", "llm_4_arm_1")
 
 extract_metastasis <- FALSE
 extract_reponse <- TRUE
 extract_diagnosis <- TRUE
 
-# trt response -----------------------------------------------------
 
+# trt response -----------------------------------------------------
+for (i in 1:length(models))  {
+  model_i  <- models[i]
+  event_i  <- redcap_event_name[i]
+  
+  message(sprintf("==> Modell %d/%d: %s  ->  Event %s",
+                  i, length(models), model_i, event_i))
+  
 if (extract_reponse) {
   llm_response_trt <- data |>
     mutate(
@@ -33,7 +40,7 @@ if (extract_reponse) {
         .f = ~ response_to_treatment_pipeline(
           model_options = list(temperature = 0, num_ctx = 10000),
           base_url = base_url,
-          model = "llama3.3:70b-instruct-q5_K_M",
+          model = model_i,
           text = .x,
           pet_ct = .y
         ),
@@ -51,25 +58,26 @@ if (extract_reponse) {
         response_to_trt == "RESPONSE" ~ 3,
         response_to_trt == "NOT_APPLICABLE" ~ 4
       ),
-      response_to_trt_pet = case_when(
-        response_to_trt_pet == "PROGRESSION" ~ 1,
-        response_to_trt_pet == "STABLE_DISEASE" ~ 2,
-        response_to_trt_pet == "PARTIAL_RESPONSE" ~ 3,
-        response_to_trt_pet == "COMPLETE_RESPONSE" ~ 4,
-        response_to_trt_pet == "NOT_APPLICABLE" ~ 5
-      ),
-      redcap_event_name = redcap_event_name
-    )
+      #response_to_trt_pet = case_when(
+      #  response_to_trt_pet == "PROGRESSION" ~ 1,
+      #  response_to_trt_pet == "STABLE_DISEASE" ~ 2,
+      #  response_to_trt_pet == "PARTIAL_RESPONSE" ~ 3,
+      #  response_to_trt_pet == "COMPLETE_RESPONSE" ~ 4,
+      #  response_to_trt_pet == "NOT_APPLICABLE" ~ 5
+      #),
+      redcap_event_name = event_i
+    ) |> 
+    select(-path, -imaging_report) |> 
+    mutate(pet_ct = if_else(pet_ct, 1, 0))
 
-  # Check that we only upload to desired arn
+  # Check that we only upload to desired arm
   if (
-    all(
-      llm_response_non_pet_formatted$redcap_event_name == redcap_event_name
+    all(llm_response_trt_formatted$redcap_event_name == event_i
     ) ==
       TRUE
   ) {
     REDCapR::redcap_write(
-      llm_response_non_pet_formatted,
+      llm_response_trt_formatted,
       overwrite_with_blanks = FALSE,
       redcap_uri = Sys.getenv("redcap_url_fxdb"),
       token = Sys.getenv("llm_radiology_project_api")
@@ -132,14 +140,15 @@ if (extract_metastasis) {
 # Diagnosis -------------------------------------------------------------------
 if (extract_diagnosis) {
   diagnosis_data <- data |>
-    select(ier_bk, imaging_report, imaging_type)
+    select(ier_bk, imaging_report, imaging_type) |> 
+    head(n = 2)
 
   llm_diagnosis_data <- diagnosis_data |>
     mutate(
       llm_extraction = map(
         .x = imaging_report,
         .f = extract_primary_location,
-        model = model,
+        model = model_i,
         model_options = list(temperature = 0, num_ctx = 10000),
         base_url = base_url,
         .progress = TRUE
@@ -186,13 +195,13 @@ if (extract_diagnosis) {
       )
     ) |>
     mutate(
-      redcap_event_name = redcap_event_name,
+      redcap_event_name = event_i,
       oncology_radiology_extraction_complete = 2
     )
 
   if (
     all(
-      llm_diagnosis_data$redcap_event_name == redcap_event_name
+      llm_diagnosis_data$redcap_event_name == event_i
     ) ==
       TRUE
   ) {
@@ -207,4 +216,5 @@ if (extract_diagnosis) {
       "Data would have overwritten data from other redcap event. Not uploaded."
     )
   }
+}
 }
