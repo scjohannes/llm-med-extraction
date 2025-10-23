@@ -13,6 +13,7 @@ format:
     columns: 1
     tbl-cap-location: bottom
 ---
+
 {{< pagebreak >}}
 
 ```{r setup}
@@ -39,9 +40,25 @@ if(redownload){
     token = Sys.getenv("llm_radio_api"),
     raw_or_label = "label"
   )$data
+
+  saveRDS(data, "./data/oncology/redcap_export_complete.rds")
 } else {
-  data <- readRDS("../data/oncology/redcap_export_complete.rds")
+  data <- readRDS("./data/oncology/redcap-2025-10-09-labels.rds")$data
 }
+
+logs <- redcap_log_read(
+  redcap_uri = Sys.getenv("redcap_fxdb_url"),
+  token = Sys.getenv("llm_radio_api"),
+  log_begin_date = Sys.Date() - 182L,
+  log_end_date = Sys.Date(),
+  record = NULL,
+  user = NULL,
+  http_response_encoding = "UTF-8",
+  locale = readr::default_locale(),
+  verbose = TRUE,
+  config_options = NULL,
+  handle_httr = NULL
+)
 ```
 
 ```{r format-data}
@@ -127,7 +144,8 @@ analysis_data_human <- analysis_data_human |>
 
 ## Overview of the Data
 
-From how many imaging reports was data extracted? 
+From how many imaging reports was data extracted?
+
 ```{r n-ier_bk}
 #| echo: false
 n_distinct(analysis_data_human$ier_bk)
@@ -175,6 +193,7 @@ analysis_data_human |>
 ```
 
 Of how many extracted metasis-location, did patients have a metastasis?
+
 ```{r tbl-metastasis}
 #| echo: false
 analysis_data_human |> 
@@ -193,7 +212,7 @@ analysis_data_human |>
   count(value) |> 
   arrange(pet_ct, desc(n)) |> 
   tt(width = 1)
-``` 
+```
 
 How many extractions per extractor?
 
@@ -209,7 +228,7 @@ analysis_data_human |>
   tt(width = 1)
 ```
 
-Did students and MDs extract different types of reports? 
+Did students and MDs extract different types of reports?
 
 ```{r tbl-extractor-x-region}
 #| echo: false
@@ -251,7 +270,7 @@ analysis_data_human |>
 
 {{< pagebreak >}}
 
-## Inter-Rater Reliability 
+## Inter-Rater Reliability
 
 ### Agreement
 
@@ -281,7 +300,6 @@ paired_ratings |>
   summarise(agreement = mean(rating_1 == rating_2))
 ```
 
-
 ### Cohen's Kappa
 
 ```{r}
@@ -293,7 +311,7 @@ kappa2(paired_ratings[, c("rating_1", "rating_2")], weight = "unweighted")
 
 ### Cohen's Kappa by task
 
-Note that because metastasis is very rare (< 10%), Cohen's Kappa is low, even though very high agreement.
+Note that because metastasis is very rare (\< 10%), Cohen's Kappa is low, even though very high agreement.
 
 ```{r}
 #| echo: false
@@ -325,6 +343,13 @@ tt(kappa_by_task, digits = 3)
 Model used for overall accuracy. We use cluster robust standard errors when making predictions.
 
 ```{r}
+model_acc <- glm(
+    correct ~ task,
+    data = analysis_data_human,
+    family = binomial(link = "logit")
+  )
+
+
 # accuracy
 model_acc <- glm(
     correct ~ task * pet_ct,
@@ -336,12 +361,14 @@ summary(model_acc)
 ```
 
 What is the overall accuracy across all tasks?
+
 ```{r}
 # Overall Accuracy
 avg_predictions(model_acc, type = "response", vcov = ~ier_bk)
 ```
 
 What is the accuracy by task?
+
 ```{r}
 #| echo: false
 #| output: false
@@ -422,7 +449,7 @@ We need to examine what's going on with the 'No Malignant Disease', 'Kidney Tumo
 
 Model used for non PET-CT scans
 
-```{r} 
+```{r}
 model_rsp_trt <- glm(
     correct ~ value,
     data = analysis_data_human |> filter(task == "Response to Treatment", pet_ct == FALSE),
@@ -472,8 +499,8 @@ avg_predictions(model_rsp_trt_pet, vcov = ~ier_bk)
 avg_predictions(model_rsp_trt_pet, by = "value", vcov = ~ier_bk)
 ```
 
-CI go above 1, which shouldn't happen. Maybe because of delta method used by `marginaleffects`?
-Stable Disease seems to have been impossible to extract correctly for PET-CT scans (?)
+CI go above 1, which shouldn't happen. Maybe because of delta method used by `marginaleffects`? Stable Disease seems to have been impossible to extract correctly for PET-CT scans (?)
+
 ```{r}
 #| echo: false
 #| warning: false
@@ -566,13 +593,14 @@ model_meta_sens_spec <- glm(
 summary(model_meta_sens_spec)
 ```
 
-
 What's the sensitivity and specificity for metastasis detection?
+
 ```{r}
 avg_predictions(model_meta_sens_spec, by = "truth", type = "response", vcov = ~ier_bk) 
 ```
 
 Does this change for PET-CT vs non PET-CT scans?
+
 ```{r fig-sens-spec-metasasis}
 #| echo: false
 #| warning: false
@@ -658,6 +686,7 @@ summary(model_md_stud)
 ```
 
 Does the overall accuracy of oncologists vs non-oncologists differ?
+
 ```{r}
 avg_predictions(model_md_stud, by = "human_group", variable = "human_group", type = "response", vcov = ~ier_bk)
 
@@ -690,9 +719,10 @@ optim_sample <- optim_sample |>
       human == 1 ~ "human",
       model == "llama3.3:70b-instruct-q5_K_M" ~ "llama3.3:70b-instruct-q5_K_M",
       model == "mistral-small:24b-instruct-2501-q4_K_M" ~ "mistral-small:24b-instruct-2501-q4_K_M",
+      model == "rndcalcle01.qwen3:32b" ~ "qwen3:32b",
+      model == "rndcalcle01.qwq:32b" ~ "qwq:32b",
     ))
 ```
-
 
 ```{r}
 m_acc <- glm(
@@ -711,7 +741,6 @@ avg_comparisons(m_acc, variable = "grp", type = "response", vcov = ~ier_bk)
 
 Accuracy by task and group
 
-
 ```{r}
 #| fig-width: 8
 #| fig-height: 6
@@ -725,6 +754,59 @@ plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk
     x = "Task",
     y = "Predicted Probability of Correct Response",
     color = ""
-  ) +
-  theme(legend.position = "bottom")
+  )
+  # theme(legend.position = "bottom")
+
+  plot_predictions(m_acc_brms, by = c("task", "grp"), type = "response") + 
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(
+    x = "Task",
+    y = "Predicted Probability of Correct Response",
+    color = ""
+  )
+```
+
+## Expor
+
+```{r}
+llm_mistakes <- optim_sample |> 
+  filter(human == 0) |> 
+  filter(correct == 0) |> 
+  select(-human, -extractor_id, -training, -item, -report_length, -model) |> 
+  rename(model = grp)
+
+#split into different filer per task
+llm_mistakes_diag <- llm_mistakes |> filter(task == "Diagnosis")
+llm_mistakes_meta <- llm_mistakes |> filter(task == "Metastasis")
+llm_mistakes_rsp <- llm_mistakes |> filter(task == "Response to Treatment")
+
+# export to excel
+library(writexl)
+write_xlsx(
+  list(
+    "Diagnosis Mistakes" = llm_mistakes_diag,
+    "Metastasis Mistakes" = llm_mistakes_meta,
+    "Response to Treatment Mistakes" = llm_mistakes_rsp
+  ),
+  path = "./output/oncology/llm_mistakes.xlsx"
+)
+
+
+# exploring some reasons for llm mistakes
+mistakes <- glm(
+    correct ~ body_region,
+    data = optim_sample |> filter(human == 0),
+    family = binomial(link = "logit")
+  )
+summary(mistakes)
+marginaleffects::avg_predictions(mistakes, by = "body_region", type = "response", vcov = ~ier_bk)
+
+mistakes <- glm(
+    correct ~ report_length,
+    data = optim_sample |> filter(human == 0),
+    family = binomial(link = "logit")
+  )
+plot_predictions(mistakes, by = "report_length", type = "response", vcov = ~ier_bk)
+
+
 ```
