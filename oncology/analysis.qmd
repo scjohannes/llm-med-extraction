@@ -721,6 +721,7 @@ optim_sample <- optim_sample |>
       model == "mistral-small:24b-instruct-2501-q4_K_M" ~ "mistral-small:24b-instruct-2501-q4_K_M",
       model == "rndcalcle01.qwen3:32b" ~ "qwen3:32b",
       model == "rndcalcle01.qwq:32b" ~ "qwq:32b",
+      model == "gpt-oss:120b" ~ "gpt-oss:120b",
     ))
 ```
 
@@ -757,16 +758,16 @@ plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk
   )
   # theme(legend.position = "bottom")
 
-  plot_predictions(m_acc_brms, by = c("task", "grp"), type = "response") + 
-  scale_y_continuous(limits = c(0, 1)) +
-  labs(
-    x = "Task",
-    y = "Predicted Probability of Correct Response",
-    color = ""
-  )
+  # plot_predictions(m_acc_brms, by = c("task", "grp"), type = "response") + 
+  # scale_y_continuous(limits = c(0, 1)) +
+  # labs(
+  #   x = "Task",
+  #   y = "Predicted Probability of Correct Response",
+  #   color = ""
+  # )
 ```
 
-## Expor
+## Export
 
 ```{r}
 llm_mistakes <- optim_sample |> 
