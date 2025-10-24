@@ -722,7 +722,8 @@ optim_sample <- optim_sample |>
       model == "rndcalcle01.qwen3:32b" ~ "qwen3:32b",
       model == "rndcalcle01.qwq:32b" ~ "qwq:32b",
       model == "gpt-oss:120b" ~ "gpt-oss:120b",
-    ))
+    ),
+    grp = factor(grp, levels = c("human", "llama3.3:70b-instruct-q5_K_M", "mistral-small:24b-instruct-2501-q4_K_M", "qwen3:32b", "qwq:32b",  "gpt-oss:120b")) )
 ```
 
 ```{r}
@@ -737,7 +738,7 @@ Overall accuracy in the prompt optimization sample
 
 ```{r}
 avg_predictions(m_acc, by = "grp", type = "response", vcov = ~ier_bk)
-avg_comparisons(m_acc, variable = "grp", type = "response", vcov = ~ier_bk)
+avg_comparisons(m_acc, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
 ```
 
 Accuracy by task and group
