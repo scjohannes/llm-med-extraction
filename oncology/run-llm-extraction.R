@@ -15,25 +15,25 @@ data <- data |>
   filter(training == "No", redcap_event_name == "Ground Truth")
 
 models <- c(
-  "llama3.3:70b-instruct-q5_K_M",
-  "mistral-small:24b-instruct-2501-q4_K_M",
-  "qwen3:32b",
-  "qwq:32b",
+  # "llama3.3:70b-instruct-q5_K_M",
+  # "mistral-small:24b-instruct-2501-q4_K_M",
+  # "qwen3:32b",
+  # "qwq:32b",
   "gpt-oss:120b"
 )
 base_url <- Sys.getenv("usb_ollama_api_h200")
 api_key <- Sys.getenv("OLLAMA_API_KEY_H200")
 redcap_event_name <- c(
-  "llm_1_arm_1",
-  "llm_2_arm_1",
-  "llm_3_arm_1",
-  "llm_4_arm_1",
+  # "llm_1_arm_1",
+  # "llm_2_arm_1",
+  # "llm_3_arm_1",
+  # "llm_4_arm_1",
   "llm_5_arm_1"
 )
 
 extract_metastasis <- TRUE
-extract_reponse <- TRUE
-extract_diagnosis <- TRUE
+extract_reponse <- FALSE
+extract_diagnosis <- FALSE
 
 
 # Logging setup
