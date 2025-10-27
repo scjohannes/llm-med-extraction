@@ -759,7 +759,7 @@ Overall accuracy in the prompt optimization sample
 
 ```{r}
 avg_predictions(m_acc, by = "grp", type = "response", vcov = ~ier_bk)
-avg_comparisons(m_acc, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
+avg_comparisons(m_acc, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
 ```
 
 Accuracy by task and group
