@@ -96,10 +96,29 @@ long_data <- data |>
 
 ground_truth_long <- long_data |> 
     filter(redcap_event_name == "Ground Truth") |> 
-    select(ier_bk, item, truth = value)
+    select(ier_bk, item, truth = value) |> 
+    group_by(ier_bk) |> 
+    mutate(
+      truth = case_when(
+        # When response to trt not applicable, then set no_tumor to NA
+        item == "no_tumor" & 
+          any(truth[item == "response_to_trt" | item == "response_to_trt_pet"] == "Not applicable") ~ "Not applicable",
+        TRUE ~ truth
+      )
+    )
 
 analysis_data <- long_data |> 
     filter(redcap_event_name != "Ground Truth") |> 
+    group_by(ier_bk, redcap_event_name) |>
+    mutate(
+      value = case_when(
+        # I only want to change the value where item == "no_tumor"
+        item == "no_tumor" & 
+          any(value[item == "response_to_trt" | item == "response_to_trt_pet"] == "Not applicable") ~ "Not applicable",
+        TRUE ~ value
+      )
+    ) |> 
+    ungroup() |> 
     left_join(ground_truth_long, by = c("ier_bk", "item")) |> 
     # where NA for ground truth and value, then question was not applicable -> remove
     filter(!is.na(value) & !is.na(truth)) |> 
@@ -709,7 +728,7 @@ plot_predictions(model_md_stud, by = c("task", "human_group"), variable = "human
 ```{r}
 optim_sample <- analysis_data |> 
   group_by(ier_bk) |> 
-  filter(any(training == "Yes")) |> 
+  filter(any(training == "No")) |> 
   ungroup()
 
 optim_sample <- optim_sample |> 
@@ -719,8 +738,8 @@ optim_sample <- optim_sample |>
       human == 1 ~ "human",
       model == "llama3.3:70b-instruct-q5_K_M" ~ "llama3.3:70b-instruct-q5_K_M",
       model == "mistral-small:24b-instruct-2501-q4_K_M" ~ "mistral-small:24b-instruct-2501-q4_K_M",
-      model == "rndcalcle01.qwen3:32b" ~ "qwen3:32b",
-      model == "rndcalcle01.qwq:32b" ~ "qwq:32b",
+      model == "rndcalcle01.qwen3:32b" | model == "qwen3:32b" ~ "qwen3:32b",
+      model == "rndcalcle01.qwq:32b" | model == "qwq:32b" ~ "qwq:32b",
       model == "gpt-oss:120b" ~ "gpt-oss:120b",
     ),
     grp = factor(grp, levels = c("human", "llama3.3:70b-instruct-q5_K_M", "mistral-small:24b-instruct-2501-q4_K_M", "qwen3:32b", "qwq:32b",  "gpt-oss:120b")) )
@@ -729,10 +748,12 @@ optim_sample <- optim_sample |>
 ```{r}
 m_acc <- glm(
     correct ~ grp * task,
-    data = optim_sample,
+    data = optim_sample  |> filter(task == "Metastasis" | task == "Response to Treatment"),
     family = binomial(link = "logit")
   )
 ```
+
+
 
 Overall accuracy in the prompt optimization sample
 
@@ -754,7 +775,7 @@ plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk
   scale_y_continuous(limits = c(0, 1)) +
   labs(
     x = "Task",
-    y = "Predicted Probability of Correct Response",
+    y = "Probability of Correct Response",
     color = ""
   )
   # theme(legend.position = "bottom")
