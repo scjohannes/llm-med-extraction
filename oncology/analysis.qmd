@@ -37,17 +37,17 @@ library(lubridate)
 
 redownload <- TRUE
 
-if(redownload){
+#if(redownload){
   data <- redcap_read(
     redcap_uri = Sys.getenv("redcap_fxdb_url"),
     token = Sys.getenv("llm_radio_api"),
     raw_or_label = "label"
   )$data
 
-  saveRDS(data, "./data/oncology/redcap_export_complete.rds")
-} else {
-  data <- readRDS("./data/oncology/redcap-2025-10-09-labels.rds")$data
-}
+# saveRDS(data, "./data/oncology/redcap_export_complete.rds")
+#} else {
+# 3  data <- readRDS("./data/oncology/redcap-2025-10-09-labels.rds")$data
+#}
 
 logs <- redcap_log_read(
   redcap_uri = Sys.getenv("redcap_fxdb_url"),
@@ -214,7 +214,7 @@ analysis_data_human |>
   pull(n)
 ```
 
-Of how many extracted metasis-location, did patients have a metastasis?
+Of how many extracted metastasis-location, did patients have a metastasis?
 
 ```{r tbl-metastasis}
 #| echo: false
@@ -226,7 +226,7 @@ analysis_data_human |>
 
 How many patients had response, stable disease or progression?
 
-```{r tbl-response-to-treatment}
+```{r tbl-response-to-treatment-1}
 #| echo: false
 analysis_data_human |> 
   group_by(pet_ct) |> 
@@ -236,6 +236,40 @@ analysis_data_human |>
   tt(width = 1)
 ```
 
+```{r tbl-response-to-treatmen-2}
+analysis_data_human |>
+  filter(task == "Response to Treatment") |>
+  distinct(ier_bk, pet_ct, truth) |>
+  count(pet_ct, truth, name = "n") |>
+  group_by(pet_ct) |>
+  mutate(pct = round(100 * n / sum(n), 1)) |>
+  arrange(pet_ct, desc(n)) |>
+  ungroup() |>
+  tt(width = 1)
+```
+Tumor-free status: yes/no/na
+```{r tb-tumor_free-yes/no/na}
+analysis_data_human |>
+  filter(task == "Radiologically Tumor Free") |>
+  distinct(ier_bk, truth) |>
+  count(truth, name = "n") |>
+  mutate(pct = n / sum(n),
+         pct_label = scales::percent(pct, accuracy = 0.1)) |>
+  arrange(desc(n)) |>
+  tt(width = 1)
+```
+Median report length with IQR
+```{r n-report_length}
+analysis_data_human |>
+  distinct(ier_bk, report_length) |>
+  summarise(
+    median_report_length = median(report_length, na.rm = TRUE),
+    IQR_report_length    = IQR(report_length, na.rm = TRUE),
+    q1                   = quantile(report_length, 0.25, na.rm = TRUE),
+    q3                   = quantile(report_length, 0.75, na.rm = TRUE)
+  ) |>
+  tt(width = 1)
+```
 How many extractions per extractor?
 
 ```{r tbl-extractors}
@@ -726,7 +760,7 @@ Does this vary by task?
 plot_predictions(model_md_stud, by = c("task", "human_group"), variable = "human_group", type = "response", vcov = ~ier_bk)
 ```
 
-## LLM vs Human in Prompt Optimization Sample
+## LLM vs Human 
 
 ```{r}
 optim_sample <- analysis_data |> 
@@ -748,6 +782,7 @@ optim_sample <- optim_sample |>
     grp = factor(grp, levels = c("human", "llama3.3:70b-instruct-q5_K_M", "mistral-small:24b-instruct-2501-q4_K_M", "qwen3:32b", "qwq:32b",  "gpt-oss:120b")) )
 ```
 
+Primary endpoints:
 ```{r}
 m_acc <- glm(
     correct ~ grp * task,
@@ -756,16 +791,12 @@ m_acc <- glm(
   )
 ```
 
-
-
-Overall accuracy in the prompt optimization sample
-
 ```{r}
-avg_predictions(m_acc, by = "grp", type = "response", vcov = ~ier_bk)
+avg_predictions(m_acc, by = c("grp", "task"), type = "response", vcov = ~ier_bk)
 avg_comparisons(m_acc, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
 ```
 
-Accuracy by task and group
+Accuracy by task (meta, rtt) and group
 
 ```{r}
 #| fig-width: 8
@@ -790,6 +821,37 @@ plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk
   #   y = "Predicted Probability of Correct Response",
   #   color = ""
   # )
+```
+Secondary endpoints:
+```{r}
+m_acc2 <- glm(
+    correct ~ grp * task,
+    data = optim_sample  |> filter(task == "Diagnosis" | task == "Radiologically Tumor Free"),
+    family = binomial(link = "logit")
+  )
+```
+
+```{r}
+avg_predictions(m_acc2, by = c("grp", "task"), type = "response", vcov = ~ier_bk)
+avg_comparisons(m_acc2, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
+```
+
+Accuracy by task (diagnosis, tumorfree) and group
+
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "Accuracy by Task and Group (Human vs LLM)"
+#| echo: false
+#| warning: false
+
+plot_predictions(m_acc2, by = c("task", "grp"), type = "response", vcov = ~ier_bk) + 
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(
+    x = "Task",
+    y = "Probability of Correct Response",
+    color = ""
+  )
 ```
 
 ## Export
