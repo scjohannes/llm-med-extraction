@@ -823,6 +823,7 @@ plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk
   # )
 ```
 Secondary endpoints:
+- task diagnosis, tumorfree
 ```{r}
 m_acc2 <- glm(
     correct ~ grp * task,
@@ -852,6 +853,16 @@ plot_predictions(m_acc2, by = c("task", "grp"), type = "response", vcov = ~ier_b
     y = "Probability of Correct Response",
     color = ""
   )
+```
+- overall accuracy
+```{r}
+m_acc3 <- glm(
+    correct ~ grp * task,
+    data = optim_sample, 
+    family = binomial(link = "logit") )
+
+avg_predictions(m_acc3,by = "grp", type = "response", vcov = ~ ier_bk, ci_level = 0.95)
+avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
 ```
 
 ## Export
