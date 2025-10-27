@@ -26,6 +26,9 @@ library(lme4)
 library(brms)
 library(tinytable)
 library(irr)
+library(dplyr)
+library(stringr)
+library(lubridate)
 ```
 
 ```{r download-data}
@@ -832,4 +835,51 @@ mistakes <- glm(
 plot_predictions(mistakes, by = "report_length", type = "response", vcov = ~ier_bk)
 
 
+```
+
+### calculate human efficiency 
+```{r}
+# --- 1) Start from raw logs ---
+df <- logs$data
+
+# --- 2) Keep only "Update record ... (Extraction 1|2)" and drop Ground Truth / LLM1–4 ---
+clean_extractions <- df %>%
+  filter(
+    str_detect(action, regex("^Update record\\b.*\\(Extraction [12]\\)", ignore_case = TRUE)),
+    !str_detect(action, regex("\\b(Ground\\s*Truth|LLM\\s*[1-4])\\b", ignore_case = TRUE))
+  )
+
+# --- 3) Ensure timestamp is a proper datetime (so sorting is truly chronological) ---
+if (!inherits(clean_extractions$timestamp, "POSIXt")) {
+  clean_extractions <- clean_extractions %>%
+    mutate(timestamp = ymd_hms(timestamp, quiet = TRUE))
+}
+
+# --- 4) Remove the oldest 400 entries for "schwenkej", then sort by user + time ---
+clean_extractions <- clean_extractions %>%
+  group_by(username) %>%
+  arrange(timestamp, .by_group = TRUE) %>%
+  filter(!(username == "schwenkej" & row_number() <= 400)) %>%
+  ungroup() %>%
+  arrange(username, timestamp)
+
+
+# ---- 5) Calculate approx time per report
+
+time <- clean_extractions |> 
+  group_by(username) |> 
+  arrange(username, timestamp) |> 
+  mutate(prev_time = lag(timestamp),
+         gap = timestamp - prev_time,
+         gap_imp = if_else(gap > 300, NA, gap)) |> 
+  ungroup() |> 
+  mutate(
+    gap_imp = if_else(is.na(gap_imp), mean(gap_imp, na.rm = TRUE), gap_imp)
+  ) |> 
+  relocate(c(prev_time,gap, gap_imp), .after = "timestamp") |> 
+  summarise(
+    mean_time = mean(gap_imp),
+    upper_quartile = quantile(gap_imp, 0.75),
+    lower_quartile = quantile(gap_imp, 0.25)
+  )
 ```
