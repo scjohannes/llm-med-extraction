@@ -29,6 +29,9 @@ library(irr)
 library(dplyr)
 library(stringr)
 library(lubridate)
+library(glue)
+library(scales)
+library(gt)
 ```
 
 ```{r download-data}
@@ -37,17 +40,17 @@ library(lubridate)
 
 redownload <- TRUE
 
-if(redownload){
+#if(redownload){
   data <- redcap_read(
     redcap_uri = Sys.getenv("redcap_fxdb_url"),
     token = Sys.getenv("llm_radio_api"),
     raw_or_label = "label"
   )$data
 
- saveRDS(data, "./data/oncology/redcap_export_complete.rds")
-} else {
- 3  data <- readRDS("./data/oncology/redcap-2025-10-09-labels.rds")$data
-}
+# saveRDS(data, "./data/oncology/redcap_export_complete.rds")
+#} else {
+# 3  data <- readRDS("./data/oncology/redcap-2025-10-09-labels.rds")$data
+#}
 
 logs <- redcap_log_read(
   redcap_uri = Sys.getenv("redcap_fxdb_url"),
@@ -188,11 +191,38 @@ analysis_data_human |>
   count(task, sort = TRUE) |> 
   tt(width = 1)
 ```
+1. PET_CT / MRI&CT
 
-What are the ten most common diagnoses?
+```{r n-pet}
+#| echo: false
+#How many PET-CT scans?
+analysis_data_human |> 
+  filter(pet_ct == TRUE) |>
+  select(ier_bk, pet_ct) |>
+  distinct() |> 
+  count() |> 
+  pull(n)
+
+
+modality_tbl <- analysis_data_human |>
+  distinct(ier_bk, pet_ct) |>
+  count(pet_ct, name = "n") |>
+  mutate(label = ifelse(pet_ct, "PET–CT", "CT/MRI")) |>
+  arrange(desc(pet_ct)) |>
+  mutate(pct = n / sum(n),
+         Value = glue("{n} ({percent(pct, accuracy = 0.1)})")) |>
+  transmute(Variable = "Imaging modality",
+            Category = label,
+            Value)
+```
+2. sex
+3. age
+
+3. Diagnosis
 
 ```{r tbl-diagnosis}
 #| echo: false
+# What are the ten most common diagnoses?
 analysis_data_human |> 
   filter(task == "Diagnosis") |> 
   select(ier_bk, truth) |> 
@@ -200,43 +230,80 @@ analysis_data_human |>
   count(truth, sort = TRUE) |> 
   head(10)  |> 
   tt(width = 1)
+
+# What are the three most common diagnoses?
+diag_top3 <- analysis_data_human |>
+  filter(task == "Diagnosis") |> 
+  distinct(ier_bk, truth) |> 
+  count(truth, sort = TRUE, name = "n") |>
+  mutate(pct = n / sum(n),
+         Value = glue("{n} ({percent(pct, accuracy = 0.1)})")) |>
+  slice_head(n = 3) |>
+  transmute(Variable = "Top 3 diagnoses",
+            Category = truth,
+            Value)
+
 ```
 
-How many PET-CT scans?
-
-```{r n-pet}
-#| echo: false
-analysis_data_human |> 
-  filter(pet_ct == TRUE) |>
-  select(ier_bk, pet_ct) |>
-  distinct() |> 
-  count() |> 
-  pull(n)
-```
-
-Of how many extracted metastasis-location, did patients have a metastasis?
+4. Metastasis
 
 ```{r tbl-metastasis}
 #| echo: false
+
+# Of how many extracted metastasis-location, did patients have a metastasis?
 analysis_data_human |> 
   filter(task == "Metastasis") |>
   count(value) |> 
   tt(width = 1)
+
+n_total_patients <- analysis_data_human |>
+  distinct(ier_bk) |>
+  tally() |>
+  pull(n)
+
+# how many patients have at least a metastasis? 
+mets_yes_patients <- analysis_data_human |>
+  filter(task == "Metastasis") |>
+  mutate(truth = tolower(trimws(truth))) |>
+  filter(truth %in% c("yes","true","1")) |>
+  distinct(ier_bk)
+
+n_mets_patients <- nrow(mets_yes_patients)
+
+tbl_mets_any <- tibble::tibble(
+  Variable = "Metastasis (patients)",
+  Category = "Any metastasis",
+  Value = sprintf("%d (%.1f%%)", n_mets_patients, 100 * n_mets_patients / n_total_patients)
+)
+
+#  Top 3 lok. of metastasis
+tbl_mets_top3 <- analysis_data_human |>
+  filter(task == "Metastasis") |>
+  mutate(truth = tolower(trimws(truth))) |>
+  filter(truth %in% c("yes","true","1")) |>
+  count(item, name = "n") |>
+  arrange(desc(n)) |>
+  mutate(pct = n / sum(n),
+         Value = sprintf("%d (%.1f%%)", n, 100 * pct)) |>
+  slice_head(n = 3) |>
+  transmute(Variable = "Metastasis localization (top 3)",
+            Category = item,
+            Value)
 ```
 
-How many patients had response, stable disease or progression?
+5. Response to treatment
 
-```{r tbl-response-to-treatment-1}
+```{r tbl-response-to-treatment}
 #| echo: false
-analysis_data_human |> 
-  group_by(pet_ct) |> 
-  filter(task == "Response to Treatment") |>
-  count(value) |> 
-  arrange(pet_ct, desc(n)) |> 
-  tt(width = 1)
-```
+#How many patients had response, stable disease or progression?
+#analysis_data_human |> 
+#  group_by(pet_ct) |> 
+#  filter(task == "Response to Treatment") |>
+#  count(value) |> 
+#  arrange(pet_ct, desc(n)) |> 
+#  tt(width = 1)
 
-```{r tbl-response-to-treatmen-2}
+# How many patients had response, SD, progression? 
 analysis_data_human |>
   filter(task == "Response to Treatment") |>
   distinct(ier_bk, pet_ct, truth) |>
@@ -246,9 +313,30 @@ analysis_data_human |>
   arrange(pet_ct, desc(n)) |>
   ungroup() |>
   tt(width = 1)
+
+resp_tbl <- analysis_data_human |>
+  filter(task == "Response to Treatment") |>
+  distinct(ier_bk, pet_ct, truth) |>
+  mutate(
+    Category = str_trim(truth),
+    Category = ifelse(is.na(Category) | Category == "", "NA", Category)
+  ) |>
+  count(pet_ct, Category, name = "n") |>
+  group_by(pet_ct) |>
+  mutate(
+    p = n / sum(n),
+    Value = sprintf("%d (%.1f%%)", n, 100 * p),
+    Variable = paste0("Treatment response (", ifelse(pet_ct, "PET–CT", "CT/MRI"), ")")
+  ) |>
+  arrange(Variable, desc(n)) |>
+  ungroup() |>
+  select(Variable, Category, Value)
 ```
-Tumor-free status: yes/no/na
+
+6. Tumor-free status: yes/no/na
 ```{r tb-tumor_free-yes/no/na}
+#| echo: false
+
 analysis_data_human |>
   filter(task == "Radiologically Tumor Free") |>
   distinct(ier_bk, truth) |>
@@ -257,16 +345,60 @@ analysis_data_human |>
          pct_label = scales::percent(pct, accuracy = 0.1)) |>
   arrange(desc(n)) |>
   tt(width = 1)
+
+tf_tbl <- analysis_data_human |>
+  filter(task == "Radiologically Tumor Free") |>
+  distinct(ier_bk, truth) |>
+  mutate(
+    Category = as.character(truth),             
+    Category = ifelse(is.na(Category) | Category == "", "NA", Category)
+  ) |>
+  count(Category, name = "n") |>
+  mutate(
+    p = n / sum(n),
+    Value = sprintf("%d (%.1f%%)", n, 100 * p)
+  ) |>
+  arrange(desc(n)) |>
+  transmute(
+    Variable = "Tumor-free status",
+    Category,
+    Value
+  )
 ```
+
+
+table01: 
+
+```{r tb-01}
+#| echo: false
+
+table1_df <- dplyr::bind_rows(
+  modality_tbl,
+  diag_top3,     
+  tbl_mets_any,
+  tbl_mets_top3,
+  resp_tbl,
+  tf_tbl
+)
+
+gt::gt(table1_df, rowname_col = "Category", groupname_col = "Variable") |>
+  gt::tab_header(title = gt::md("**Table 1.**")) |>
+  gt::cols_label(Value = "n (%)") |>
+  gt::fmt_missing(columns = gt::everything(), missing_text = "—") |>
+  gt::tab_options(table.font.size = gt::px(13), data_row.padding = gt::px(6)) |>
+  gt::opt_row_striping() |>
+  gt::tab_options(row.striping.background_color = "#F5F6FA") 
+```
+
 Median report length with IQR
+
 ```{r n-report_length}
 analysis_data_human |>
   distinct(ier_bk, report_length) |>
   summarise(
     median_report_length = median(report_length, na.rm = TRUE),
-    IQR_report_length    = IQR(report_length, na.rm = TRUE),
-    q1                   = quantile(report_length, 0.25, na.rm = TRUE),
-    q3                   = quantile(report_length, 0.75, na.rm = TRUE)
+    min_report_length    = min(report_length, na.rm = TRUE),
+    max_report_length    = max(report_length, na.rm = TRUE)
   ) |>
   tt(width = 1)
 ```
@@ -793,8 +925,41 @@ m_acc <- glm(
 
 ```{r}
 avg_predictions(m_acc, by = c("grp", "task"), type = "response", vcov = ~ier_bk)
-avg_comparisons(m_acc, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
+comp <- avg_comparisons(m_acc, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
 ```
+
+```{r}
+plot_comparisons(m_acc, newdata = optim_sample  |> filter(task == "Metastasis"), variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
+```
+
+```{r}
+avg_comparisons(m_acc, newdata = optim_sample |> filter(task == "Metastasis"), variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf)) |> 
+  data.frame() |> 
+  ggplot() +
+  aes(x = contrast, y = estimate) + 
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + 
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_hline(yintercept = -0.05, linetype = "solid") +
+  coord_flip() +
+  theme_light()
+```
+
+```{r}
+avg_comparisons(m_acc, newdata = optim_sample |> filter(task == "Response to Treatment"), variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf)) |> 
+  data.frame() |> 
+  ggplot() +
+  aes(x = contrast, y = estimate) + 
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + 
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_hline(yintercept = -0.05, linetype = "solid") +
+  coord_flip() +
+  theme_light()
+```
+
+OKABE ITO
+
+
 
 Accuracy by task (meta, rtt) and group
 
