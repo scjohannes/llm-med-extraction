@@ -37,17 +37,17 @@ library(lubridate)
 
 redownload <- TRUE
 
-#if(redownload){
+if(redownload){
   data <- redcap_read(
     redcap_uri = Sys.getenv("redcap_fxdb_url"),
     token = Sys.getenv("llm_radio_api"),
     raw_or_label = "label"
   )$data
 
-# saveRDS(data, "./data/oncology/redcap_export_complete.rds")
-#} else {
-# 3  data <- readRDS("./data/oncology/redcap-2025-10-09-labels.rds")$data
-#}
+ saveRDS(data, "./data/oncology/redcap_export_complete.rds")
+} else {
+ 3  data <- readRDS("./data/oncology/redcap-2025-10-09-labels.rds")$data
+}
 
 logs <- redcap_log_read(
   redcap_uri = Sys.getenv("redcap_fxdb_url"),
