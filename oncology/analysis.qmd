@@ -1151,7 +1151,103 @@ avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equ
 table for predictions and comparisons secondary endpoints
 
 ```{r tbl-acc-se}
+## Group & block order
+ord_grp  <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
+              "mistral-small:24b-instruct-2501-q4_K_M","llama3.3:70b-instruct-q5_K_M")
+ord_task <- c("Diagnosis","Radiologically Tumor Free","Overall")
 
+## Models
+m_acc2 <- glm(
+  correct ~ grp * task,
+  data = optim_sample |> dplyr::filter(task %in% c("Diagnosis","Radiologically Tumor Free")),
+  family = binomial(link = "logit")
+)
+m_acc3 <- glm(
+  correct ~ grp * task,
+  data = optim_sample,
+  family = binomial(link = "logit")
+)
+
+## Accuracies
+pred_task <- avg_predictions(
+  m_acc2, by = c("grp","task"), type = "response",
+  vcov = ~ier_bk, ci_level = 0.95
+) |>
+  data.frame() |>
+  transmute(
+    task, grp,
+    Accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high)
+  )
+
+pred_overall <- avg_predictions(
+  m_acc3, by = "grp", type = "response",
+  vcov = ~ier_bk, ci_level = 0.95
+) |>
+  data.frame() |>
+  mutate(task = "Overall") |>
+  transmute(
+    task, grp,
+    Accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high)
+  )
+
+pred_all <- bind_rows(pred_task, pred_overall)
+
+## Comparisons 
+comp_task <- avg_comparisons(
+  m_acc2, variable = "grp", by = "task", type = "response",
+  vcov = ~ier_bk, equivalence = c(-0.05, Inf), ci_level = 0.95
+) |>
+  data.frame() |>
+  mutate(
+    grp = str_replace(contrast, "\\s*-\\s*human$", ""),
+    noninferior = conf.low > -0.05
+  ) |>
+  transmute(
+    task, grp,
+    `Model vs human` = sprintf("%+.1f pp (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
+    `NI (Δ > -5pp)`  = if_else(noninferior, "yes", "no")
+  )
+
+comp_overall <- avg_comparisons(
+  m_acc3, variable = "grp", type = "response",
+  vcov = ~ier_bk, equivalence = c(-0.05, Inf), ci_level = 0.95
+) |>
+  data.frame() |>
+  mutate(
+    task = "Overall",
+    grp = str_replace(contrast, "\\s*-\\s*human$", ""),
+    noninferior = conf.low > -0.05
+  ) |>
+  transmute(
+    task, grp,
+    `Model vs human` = sprintf("%+.1f pp (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
+    `NI (Δ > -5pp)`  = if_else(noninferior, "yes", "no")
+  )
+
+comp_all <- bind_rows(comp_task, comp_overall)
+
+## Combine & render
+tab_all <- pred_all |>
+  left_join(comp_all, by = c("task","grp")) |>
+  mutate(
+    task = factor(task, levels = ord_task),
+    grp  = factor(grp,  levels = ord_grp)
+  ) |>
+  arrange(task, grp) |>
+  mutate(
+    `Model vs human` = if_else(grp == "human", "", `Model vs human`),
+    `NI (Δ > -5pp)`  = if_else(grp == "human", "", `NI (Δ > -5pp)`)
+  ) |>
+  select(task, grp, Accuracy, `Model vs human`, `NI (Δ > -5pp)`)
+
+gt(tab_all, groupname_col = "task") |>
+  cols_label(
+    task = "Task", grp = "Group",
+    Accuracy = "Accuracy (95% CI)",
+    `Model vs human` = "Difference vs human (pp)",
+    `NI (Δ > -5pp)`  = "Non-inferior?"
+  ) |>
+  tab_options(data_row.padding = px(4))
 
 ```
 
@@ -1284,6 +1380,13 @@ time <- clean_extractions |>
     upper_quartile = quantile(gap_imp, 0.75),
     lower_quartile = quantile(gap_imp, 0.25)
   )
+```
+
+### calculate LLM's efficiency
+```{r}
+df <- readr::read_csv(file.choose()) #csv model_iteration_duration einlesen
+
+
 ```
 
 ## Export
