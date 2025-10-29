@@ -564,6 +564,7 @@ What is the accuracy by task?
 # Accuracy by Task
 avg_predictions(model_acc, by = "task", type = "response", vcov = ~ier_bk)
 avg_predictions(model_acc, by = c("task", "pet_ct"), type = "response", vcov = ~ier_bk)
+avg_predictions(model_acc, by = "task", type = "response", vcov = ~ier_bk)
 ```
 
 ```{r fig-task-accuracy-all}
@@ -915,6 +916,8 @@ optim_sample <- optim_sample |>
 ```
 
 Primary endpoints:
+(rtt, metastasis)
+
 ```{r}
 m_acc <- glm(
     correct ~ grp * task,
@@ -923,43 +926,154 @@ m_acc <- glm(
   )
 ```
 
+predictions and comparisons
+
 ```{r}
 avg_predictions(m_acc, by = c("grp", "task"), type = "response", vcov = ~ier_bk)
-comp <- avg_comparisons(m_acc, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
+avg_comparisons(m_acc, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
+```
+table for predictions and comparisons
+
+```{r tbl-acc-pe}
+## 0) Desired order for groups 
+ord <- c(
+  "human",
+  "gpt-oss:120b",
+  "qwen3:32b",
+  "qwq:32b",
+  "mistral-small:24b-instruct-2501-q4_K_M",
+  "llama3.3:70b-instruct-q5_K_M"
+)
+
+## 1) Accuracies by task × grp
+pred <- avg_predictions(
+  m_acc, by = c("grp", "task"), type = "response", vcov = ~ ier_bk
+) |>
+  data.frame() |>
+  transmute(
+    task, grp,
+    acc_est  = estimate, acc_low = conf.low, acc_high = conf.high,
+    Accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*acc_est, 100*acc_low, 100*acc_high)
+  )
+
+## 2) Comparisons (grp – human) within each task
+comp <- avg_comparisons(
+  m_acc, variable = "grp", by = "task", type = "response",
+  vcov = ~ ier_bk, equivalence = c(-0.05, Inf)
+) |>
+  data.frame() |>
+  mutate(
+    grp = str_replace(contrast, "\\s*-\\s*human$", ""),    
+    noninferior = conf.low > -0.05
+  ) |>
+  transmute(
+    task, grp,
+    `Model vs human` = sprintf("%+.1f pp (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
+    `NI (Δ > -5pp)`  = if_else(noninferior, "yes", "no")
+  )
+
+## 3) Combine, order, and blank human comparison cells
+tab <- pred |>
+  left_join(comp, by = c("task", "grp")) |>
+  mutate(grp = factor(grp, levels = ord)) |>
+  arrange(task, grp) |>
+  mutate(
+    `Model vs human` = if_else(grp == "human", "", `Model vs human`),
+    `NI (Δ > -5pp)`  = if_else(grp == "human", "", `NI (Δ > -5pp)`)
+  ) |>
+  select(task, grp, Accuracy, `Model vs human`, `NI (Δ > -5pp)`)
+
+## 4) clean table 
+gt(tab, groupname_col = "task") |>
+  cols_label(
+    task = "Task",
+    grp  = "Group",
+    Accuracy = "Accuracy (95% CI)",
+    `Model vs human` = "Difference vs human (pp)",
+    `NI (Δ > -5pp)`  = "Non-inferior?"
+  ) |>
+  tab_options(data_row.padding = px(4))
 ```
 
 ```{r}
 plot_comparisons(m_acc, newdata = optim_sample  |> filter(task == "Metastasis"), variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
 ```
 
-```{r}
-avg_comparisons(m_acc, newdata = optim_sample |> filter(task == "Metastasis"), variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf)) |> 
-  data.frame() |> 
-  ggplot() +
-  aes(x = contrast, y = estimate) + 
-  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + 
-  geom_hline(yintercept = 0, linetype = "dotted") +
-  geom_hline(yintercept = -0.05, linetype = "solid") +
-  coord_flip() +
-  theme_light()
+```{r theme-for-figs}
+# Reusable theme for figs
+theme_medical <- theme_minimal(base_size = 11, base_family = "sans") +
+  theme(
+    panel.grid.major.x = element_line(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor   = element_blank(),
+    axis.title = element_text(face = "bold"),
+    axis.text  = element_text(color = "black"),
+    axis.line  = element_line(linewidth = 0.4),
+    axis.ticks = element_line(linewidth = 0.4),
+    legend.position = "bottom",
+   legend.direction = "horizontal",
+   plot.margin = margin(5.5, 7, 5.5, 5.5)
+  )
+
+# Set order for figs
+wanted_levels <- rev(c(
+  "gpt-oss:120b - human",
+  "qwen3:32b - human",
+  "qwq:32b - human",
+  "mistral-small:24b-instruct-2501-q4_K_M - human",
+  "llama3.3:70b-instruct-q5_K_M - human"
+))
 ```
 
-```{r}
-avg_comparisons(m_acc, newdata = optim_sample |> filter(task == "Response to Treatment"), variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf)) |> 
-  data.frame() |> 
-  ggplot() +
-  aes(x = contrast, y = estimate) + 
+forest plot: metastasis 
+
+```{r forest-meta}
+#| fig-width: 
+#| fig-height: 
+#| fig-cap: ""
+#| echo: false
+#| warning: false
+
+dfm <- avg_comparisons(
+  m_acc,
+  newdata = optim_sample |> filter(task == "Metastasis"),
+  variable = "grp", by = "task", type = "response",
+  vcov = ~ier_bk, equivalence = c(-0.05, Inf)
+) |> 
+  data.frame()
+
+dfm$contrast <- factor(dfm$contrast, levels = wanted_levels)
+
+ggplot(dfm, aes(x = contrast, y = estimate)) +
   geom_point() +
-  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + 
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0) +
   geom_hline(yintercept = 0, linetype = "dotted") +
-  geom_hline(yintercept = -0.05, linetype = "solid") +
+  geom_hline(yintercept = -0.05, linetype = "solid", color = "red") +
   coord_flip() +
-  theme_light()
+  theme_medical
 ```
+forest plot: rtt 
 
-OKABE ITO
+```{r forest-rtt}
+#| fig-width: 
+#| fig-height: 
+#| fig-cap: ""
+#| echo: false
+#| warning: false
 
+dfrtt <- avg_comparisons(m_acc, newdata = optim_sample |> filter(task == "Response to Treatment"), variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf)) |> 
+  data.frame()
 
+dfrtt$contrast <- factor(dfrtt$contrast, levels = wanted_levels)
+
+ggplot(dfrtt, aes(x = contrast, y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_hline(yintercept = -0.05, linetype = "solid", color = "red") +
+  coord_flip() +
+  theme_medical
+```
 
 Accuracy by task (meta, rtt) and group
 
@@ -970,39 +1084,144 @@ Accuracy by task (meta, rtt) and group
 #| echo: false
 #| warning: false
 
-plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk) + 
-  scale_y_continuous(limits = c(0, 1)) +
-  labs(
-    x = "Task",
-    y = "Probability of Correct Response",
-    color = ""
-  )
-  # theme(legend.position = "bottom")
+#plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk) + 
+#  scale_y_continuous(limits = c(0, 1)) +
+#  labs(
+#    x = "Task",
+#    y = "Probability of Correct Response",
+#    color = ""
+#  )
 
-  # plot_predictions(m_acc_brms, by = c("task", "grp"), type = "response") + 
-  # scale_y_continuous(limits = c(0, 1)) +
-  # labs(
-  #   x = "Task",
-  #   y = "Predicted Probability of Correct Response",
-  #   color = ""
-  # )
+# palette
+okabe_ito_named <- c(
+  human                                     = "#000000",
+  "gpt-oss:120b"                            = "#E69F00",
+  "qwen3:32b"                               = "#56B4E9",
+  "qwq:32b"                                 = "#009E73",
+  "mistral-small:24b-instruct-2501-q4_K_M"  = "#0072B2",
+  "llama3.3:70b-instruct-q5_K_M"            = "#D55E00"
+)
+
+# order
+ord_legend <- c(
+  "human",
+  "gpt-oss:120b",
+  "qwen3:32b",
+  "qwq:32b",
+  "mistral-small:24b-instruct-2501-q4_K_M",
+  "llama3.3:70b-instruct-q5_K_M"
+)
+
+# Figure 
+plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk) +
+  scale_y_continuous(limits = c(0, 1)) +
+  scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
+  scale_fill_manual(values = okabe_ito_named,  breaks = ord_legend, drop = FALSE) +
+  labs(x = "Task", y = "Probability of Correct Response", color = "") +
+  theme_medical
+
 ```
 Secondary endpoints:
+
+predictions and comparisons
 - task diagnosis, tumorfree
+
 ```{r}
 m_acc2 <- glm(
     correct ~ grp * task,
     data = optim_sample  |> filter(task == "Diagnosis" | task == "Radiologically Tumor Free"),
     family = binomial(link = "logit")
   )
-```
 
-```{r}
 avg_predictions(m_acc2, by = c("grp", "task"), type = "response", vcov = ~ier_bk)
 avg_comparisons(m_acc2, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
 ```
 
-Accuracy by task (diagnosis, tumorfree) and group
+- overall accuracy
+```{r}
+m_acc3 <- glm(
+    correct ~ grp * task,
+    data = optim_sample, 
+    family = binomial(link = "logit") )
+
+avg_predictions(m_acc3,by = "grp", type = "response", vcov = ~ ier_bk, ci_level = 0.95)
+avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
+```
+
+table for predictions and comparisons secondary endpoints
+
+```{r tbl-acc-se}
+
+
+```
+
+forest plot: diagnosis 
+
+```{r forest-diag}
+#| echo: false
+#| warning: false
+#| fig-cap: 
+#| fig-height: null
+#| fig-width: null
+
+dfd <- avg_comparisons(
+  m_acc2,
+  newdata = optim_sample |> filter(task == "Diagnosis"),
+  variable = "grp", by = "task", type = "response",
+  vcov = ~ ier_bk, equivalence = c(-0.05, Inf)
+) |> 
+  data.frame()
+
+dfd$contrast <- factor(dfd$contrast, levels = wanted_levels)
+
+ggplot(dfd, aes(x = contrast, y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_hline(yintercept = -0.05, linetype = "solid", color = "red") +
+  coord_flip() +
+  theme_medical
+```
+forest plot: tumor-free
+```{r forest-tf}
+#| echo: false
+#| warning: false
+#| fig-cap: 
+#| fig-height: null
+#| fig-width: null
+
+dfrtf <- avg_comparisons(
+  m_acc2,
+  newdata = optim_sample |> filter(task == "Radiologically Tumor Free"),
+  variable = "grp", by = "task", type = "response",
+  vcov = ~ ier_bk, equivalence = c(-0.05, Inf)
+) |>
+  data.frame()
+
+dfrtf$contrast <- factor(dfrtf$contrast, levels = wanted_levels)
+
+ggplot(dfrtf, aes(x = contrast, y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_hline(yintercept = -0.05, linetype = "solid", color = "red") +
+  coord_flip() +
+  theme_medical
+```
+
+forest plot: overall accuracy
+```{r forest-allacc}
+#| echo: false
+#| warning: false
+#| fig-cap: 
+#| fig-height: null
+#| fig-width: null
+
+
+```
+
+
+Accuracy by task (diagnosis, tumorfree), overall and group
 
 ```{r}
 #| fig-width: 8
@@ -1018,61 +1237,6 @@ plot_predictions(m_acc2, by = c("task", "grp"), type = "response", vcov = ~ier_b
     y = "Probability of Correct Response",
     color = ""
   )
-```
-- overall accuracy
-```{r}
-m_acc3 <- glm(
-    correct ~ grp * task,
-    data = optim_sample, 
-    family = binomial(link = "logit") )
-
-avg_predictions(m_acc3,by = "grp", type = "response", vcov = ~ ier_bk, ci_level = 0.95)
-avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
-```
-
-## Export
-
-```{r}
-llm_mistakes <- optim_sample |> 
-  filter(human == 0) |> 
-  filter(correct == 0) |> 
-  select(-human, -extractor_id, -training, -item, -report_length, -model) |> 
-  rename(model = grp)
-
-#split into different filer per task
-llm_mistakes_diag <- llm_mistakes |> filter(task == "Diagnosis")
-llm_mistakes_meta <- llm_mistakes |> filter(task == "Metastasis")
-llm_mistakes_rsp <- llm_mistakes |> filter(task == "Response to Treatment")
-
-# export to excel
-library(writexl)
-write_xlsx(
-  list(
-    "Diagnosis Mistakes" = llm_mistakes_diag,
-    "Metastasis Mistakes" = llm_mistakes_meta,
-    "Response to Treatment Mistakes" = llm_mistakes_rsp
-  ),
-  path = "./output/oncology/llm_mistakes.xlsx"
-)
-
-
-# exploring some reasons for llm mistakes
-mistakes <- glm(
-    correct ~ body_region,
-    data = optim_sample |> filter(human == 0),
-    family = binomial(link = "logit")
-  )
-summary(mistakes)
-marginaleffects::avg_predictions(mistakes, by = "body_region", type = "response", vcov = ~ier_bk)
-
-mistakes <- glm(
-    correct ~ report_length,
-    data = optim_sample |> filter(human == 0),
-    family = binomial(link = "logit")
-  )
-plot_predictions(mistakes, by = "report_length", type = "response", vcov = ~ier_bk)
-
-
 ```
 
 ### calculate human efficiency 
@@ -1120,4 +1284,49 @@ time <- clean_extractions |>
     upper_quartile = quantile(gap_imp, 0.75),
     lower_quartile = quantile(gap_imp, 0.25)
   )
+```
+
+## Export
+
+```{r}
+llm_mistakes <- optim_sample |> 
+  filter(human == 0) |> 
+  filter(correct == 0) |> 
+  select(-human, -extractor_id, -training, -item, -report_length, -model) |> 
+  rename(model = grp)
+
+#split into different filer per task
+llm_mistakes_diag <- llm_mistakes |> filter(task == "Diagnosis")
+llm_mistakes_meta <- llm_mistakes |> filter(task == "Metastasis")
+llm_mistakes_rsp <- llm_mistakes |> filter(task == "Response to Treatment")
+
+# export to excel
+library(writexl)
+write_xlsx(
+  list(
+    "Diagnosis Mistakes" = llm_mistakes_diag,
+    "Metastasis Mistakes" = llm_mistakes_meta,
+    "Response to Treatment Mistakes" = llm_mistakes_rsp
+  ),
+  path = "./output/oncology/llm_mistakes.xlsx"
+)
+
+
+# exploring some reasons for llm mistakes
+mistakes <- glm(
+    correct ~ body_region,
+    data = optim_sample |> filter(human == 0),
+    family = binomial(link = "logit")
+  )
+summary(mistakes)
+marginaleffects::avg_predictions(mistakes, by = "body_region", type = "response", vcov = ~ier_bk)
+
+mistakes <- glm(
+    correct ~ report_length,
+    data = optim_sample |> filter(human == 0),
+    family = binomial(link = "logit")
+  )
+plot_predictions(mistakes, by = "report_length", type = "response", vcov = ~ier_bk)
+
+
 ```
