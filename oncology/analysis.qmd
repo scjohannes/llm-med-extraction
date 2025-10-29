@@ -1253,7 +1253,7 @@ gt(tab_all, groupname_col = "task") |>
 ```{r forest-diag}
 #| echo: false
 #| warning: false
-#| fig-cap: 
+#| fig-cap: ""
 #| fig-height: null
 #| fig-width: null
 
@@ -1280,7 +1280,7 @@ ggplot(dfd, aes(x = contrast, y = estimate)) +
 ```{r forest-tf}
 #| echo: false
 #| warning: false
-#| fig-cap: 
+#| fig-cap: ""
 #| fig-height: null
 #| fig-width: null
 
@@ -1307,9 +1307,34 @@ ggplot(dfrtf, aes(x = contrast, y = estimate)) +
 ```{r forest-allacc}
 #| echo: false
 #| warning: false
-#| fig-cap: 
+#| fig-cap: ""
 #| fig-height: null
 #| fig-width: null
+
+dfover <- avg_comparisons(
+  m_acc3,
+  variable = "grp", type = "response",
+  vcov = ~ ier_bk, equivalence = c(-0.05, Inf)
+) |>
+  data.frame()
+
+wanted_levels_overall <- c(
+  "gpt-oss:120b - human",
+  "qwen3:32b - human",
+  "qwq:32b - human",
+  "mistral-small:24b-instruct-2501-q4_K_M - human",
+  "llama3.3:70b-instruct-q5_K_M - human"
+)
+
+dfover$contrast <- factor(dfover$contrast, levels = wanted_levels_overall)
+
+ggplot(dfover, aes(x = contrast, y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0) +
+  geom_hline(yintercept = 0,     linetype = "dotted") +
+  geom_hline(yintercept = -0.05, linetype = "solid", color = "red") +
+  coord_flip() +
+  theme_medical
 
 
 ```
@@ -1324,13 +1349,14 @@ ggplot(dfrtf, aes(x = contrast, y = estimate)) +
 #| echo: false
 #| warning: false
 
-plot_predictions(m_acc2, by = c("task", "grp"), type = "response", vcov = ~ier_bk) + 
-  scale_y_continuous(limits = c(0, 1)) +
-  labs(
-    x = "Task",
-    y = "Probability of Correct Response",
-    color = ""
-  )
+#plot_predictions(m_acc2, by = c("task", "grp"), type = "response", vcov = ~ier_bk) + 
+#  scale_y_continuous(limits = c(0, 1)) +
+#  labs(
+#    x = "Task",
+#    y = "Probability of Correct Response",
+#    color = ""
+#  )
+
 ```
 
 ### efficiency 
@@ -1379,7 +1405,6 @@ time <- clean_extractions |>
     min_sec  = min(gap_imp,  na.rm = TRUE),
     max_sec  = max(gap_imp,  na.rm = TRUE)
   )
-
 time
 ```
 # LLM's 
@@ -1412,7 +1437,6 @@ per_model <- bind_rows(
     mean_min = mean_sec / 60,
     .groups = "drop"
   )
-
 per_model
 ```
 
@@ -1439,7 +1463,6 @@ for (m in names(cms)) {
   cat("\n###", m, "\n")
   print(cms[[m]])
 }
-
 ```
 
 #sens/spez (human and LLMs)
@@ -1480,7 +1503,6 @@ sensspec_llm <- avg_predictions(
 # 4) table
 gt(sensspec_llm, groupname_col = "truth") |>
   cols_label(truth = "Metric", grp = "Group", Estimate = "Estimate (95% CI)")
-
 ```
 #ppv/npv (human and LLMs)
 ```{r tbl-ppv-npv-meta}
@@ -1604,7 +1626,6 @@ gt(sensspec_prog, groupname_col = "truth") |>
     Estimate = "Estimate (95% CI)"
   ) |>
   tab_options(data_row.padding = px(4))
-
 ```
 
 #ppv/npv (human and LLMs)
@@ -1662,16 +1683,39 @@ gt(ppv_npv_prog) |>
     NPV = "NPV (95% CI)"
   ) |>
   tab_options(data_row.padding = px(4))
-
 ```
-
 
 ### Export gpt:oss mistakes 
 ```{r}
+library(writexl)
 
+target_model <- "gpt-oss:120b"
+
+gpt_oss_mistakes <- optim_sample |>
+  filter(human == 0, grp == target_model, correct == 0) |>
+  select(-human, -extractor_id, -training, -item, -report_length, -model) |>
+  rename(model = grp)
+
+sheet_list <- split(gpt_oss_mistakes |> select(-task), gpt_oss_mistakes$task)
+sheet_list <- lapply(sheet_list, as.data.frame)
+
+nm <- names(sheet_list)
+nm_new <- nm
+nm_new[nm == "Diagnosis"]             <- "Diagnosis Mistakes"
+nm_new[nm == "Metastasis"]            <- "Metastasis Mistakes"
+nm_new[nm == "Response to Treatment"] <- "Response to Treatment Mistakes"
+names(sheet_list) <- nm_new
+
+# save inside your working dir
+#out_dir <- file.path(getwd(), "output", "oncology")
+#dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+#out_path <- file.path(out_dir, "gpt-oss-120b_mistakes.xlsx")
+#write_xlsx(sheet_list, path = out_path)
+
+#cat("Saved to:\n", normalizePath(out_path, winslash = "/"), "\n")
+#if (.Platform$OS.type == "windows") shell.exec(normalizePath(out_path))
 ```
-
-
 
 ### Export
 ```{r}
