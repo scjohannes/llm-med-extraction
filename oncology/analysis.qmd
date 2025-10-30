@@ -386,8 +386,7 @@ gt::gt(table1_df, rowname_col = "Category", groupname_col = "Variable") |>
   gt::cols_label(Value = "n (%)") |>
   gt::fmt_missing(columns = gt::everything(), missing_text = "—") |>
   gt::tab_options(table.font.size = gt::px(13), data_row.padding = gt::px(6)) |>
-  gt::opt_row_striping() |>
-  gt::tab_options(row.striping.background_color = "#F5F6FA") 
+  gt::opt_row_striping() 
 ```
 
 Median report length with IQR
@@ -917,6 +916,8 @@ optim_sample <- optim_sample |>
 
 ##Primary endpoints: (rtt, metastasis)
 
+# model
+
 ```{r}
 m_acc <- glm(
     correct ~ grp * task,
@@ -994,10 +995,6 @@ gt(tab, groupname_col = "task") |>
   tab_options(data_row.padding = px(4))
 ```
 
-```{r}
-plot_comparisons(m_acc, newdata = optim_sample  |> filter(task == "Metastasis"), variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
-```
-
 ```{r theme-for-figs}
 # Reusable theme for figs
 theme_medical <- theme_minimal(base_size = 11, base_family = "sans") +
@@ -1027,8 +1024,8 @@ wanted_levels <- rev(c(
 #forest plot: metastasis 
 
 ```{r forest-meta}
-#| fig-width: 
-#| fig-height: 
+#| fig-width: 8
+#| fig-height: 4
 #| fig-cap: ""
 #| echo: false
 #| warning: false
@@ -1054,8 +1051,8 @@ ggplot(dfm, aes(x = contrast, y = estimate)) +
 #forest plot: rtt 
 
 ```{r forest-rtt}
-#| fig-width: 
-#| fig-height: 
+#| fig-width: 8
+#| fig-height: 4
 #| fig-cap: ""
 #| echo: false
 #| warning: false
@@ -1113,7 +1110,9 @@ ord_legend <- c(
 
 # Figure 
 plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk) +
-  scale_y_continuous(limits = c(0, 1)) +
+  scale_y_continuous(
+  limits = c(0.5, 1),
+  breaks = seq(0.5, 1, by = 0.1)) +
   scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
   scale_fill_manual(values = okabe_ito_named,  breaks = ord_legend, drop = FALSE) +
   labs(x = "Task", y = "Probability of Correct Response", color = "") +
@@ -1122,7 +1121,7 @@ plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk
 ```
 ##Secondary endpoints:
 
-#predictions and comparisons: task diagnosis, tumorfree
+#model, predictions and comparisons: task diagnosis, tumorfree
 
 ```{r}
 m_acc2 <- glm(
@@ -1134,7 +1133,7 @@ m_acc2 <- glm(
 avg_predictions(m_acc2, by = c("grp", "task"), type = "response", vcov = ~ier_bk)
 avg_comparisons(m_acc2, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf))
 ```
-#predictions and comparisons: overall accuracy
+#model, predictions and comparisons: overall accuracy
 ```{r}
 m_acc3 <- glm(
     correct ~ grp * task,
@@ -1152,18 +1151,6 @@ avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equ
 ord_grp  <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
               "mistral-small:24b-instruct-2501-q4_K_M","llama3.3:70b-instruct-q5_K_M")
 ord_task <- c("Diagnosis","Radiologically Tumor Free","Overall")
-
-## Models
-m_acc2 <- glm(
-  correct ~ grp * task,
-  data = optim_sample |> dplyr::filter(task %in% c("Diagnosis","Radiologically Tumor Free")),
-  family = binomial(link = "logit")
-)
-m_acc3 <- glm(
-  correct ~ grp * task,
-  data = optim_sample,
-  family = binomial(link = "logit")
-)
 
 ## Accuracies
 pred_task <- avg_predictions(
@@ -1223,7 +1210,7 @@ comp_overall <- avg_comparisons(
 
 comp_all <- bind_rows(comp_task, comp_overall)
 
-## Combine & render
+## render
 tab_all <- pred_all |>
   left_join(comp_all, by = c("task","grp")) |>
   mutate(
@@ -1245,7 +1232,6 @@ gt(tab_all, groupname_col = "task") |>
     `NI (Δ > -5pp)`  = "Non-inferior?"
   ) |>
   tab_options(data_row.padding = px(4))
-
 ```
 
 #forest plot: diagnosis 
@@ -1254,8 +1240,8 @@ gt(tab_all, groupname_col = "task") |>
 #| echo: false
 #| warning: false
 #| fig-cap: ""
-#| fig-height: null
-#| fig-width: null
+#| fig-height: 4
+#| fig-width: 8
 
 dfd <- avg_comparisons(
   m_acc2,
@@ -1281,8 +1267,8 @@ ggplot(dfd, aes(x = contrast, y = estimate)) +
 #| echo: false
 #| warning: false
 #| fig-cap: ""
-#| fig-height: null
-#| fig-width: null
+#| fig-height: 4
+#| fig-width: 8
 
 dfrtf <- avg_comparisons(
   m_acc2,
@@ -1308,8 +1294,8 @@ ggplot(dfrtf, aes(x = contrast, y = estimate)) +
 #| echo: false
 #| warning: false
 #| fig-cap: ""
-#| fig-height: null
-#| fig-width: null
+#| fig-height: 4
+#| fig-width: 8
 
 dfover <- avg_comparisons(
   m_acc3,
@@ -1318,15 +1304,7 @@ dfover <- avg_comparisons(
 ) |>
   data.frame()
 
-wanted_levels_overall <- c(
-  "gpt-oss:120b - human",
-  "qwen3:32b - human",
-  "qwq:32b - human",
-  "mistral-small:24b-instruct-2501-q4_K_M - human",
-  "llama3.3:70b-instruct-q5_K_M - human"
-)
-
-dfover$contrast <- factor(dfover$contrast, levels = wanted_levels_overall)
+dfover$contrast <- factor(dfover$contrast, levels = wanted_levels)
 
 ggplot(dfover, aes(x = contrast, y = estimate)) +
   geom_point() +
@@ -1335,12 +1313,10 @@ ggplot(dfover, aes(x = contrast, y = estimate)) +
   geom_hline(yintercept = -0.05, linetype = "solid", color = "red") +
   coord_flip() +
   theme_medical
-
-
 ```
 
 
-#Accuracy by task (diagnosis, tumorfree), overall and group
+#Accuracy by task (diagnosis, tumorfree) and group
 
 ```{r}
 #| fig-width: 8
@@ -1349,14 +1325,45 @@ ggplot(dfover, aes(x = contrast, y = estimate)) +
 #| echo: false
 #| warning: false
 
-#plot_predictions(m_acc2, by = c("task", "grp"), type = "response", vcov = ~ier_bk) + 
-#  scale_y_continuous(limits = c(0, 1)) +
-#  labs(
-#    x = "Task",
-#    y = "Probability of Correct Response",
-#    color = ""
-#  )
+plot_predictions(m_acc2, by = c("task", "grp"), type = "response", vcov = ~ier_bk) +
+  scale_y_continuous(
+  limits = c(0.5, 1),
+  breaks = seq(0.5, 1, by = 0.1)) +
+  scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
+  scale_fill_manual(values = okabe_ito_named,  breaks = ord_legend, drop = FALSE) +
+  labs(x = "Task", y = "Probability of Correct Response", color = "") +
+  theme_medical
+```
 
+# Accuracy overall by group
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "Accuracy by Task and Group (Human vs LLM)"
+#| echo: false
+#| warning: fals
+
+ap <- avg_predictions(
+  m_acc3,
+  by   = "grp",
+  type = "response",
+  vcov = ~ ier_bk
+) |>
+  mutate(xlab = "overall")   
+
+pd <- position_dodge(width = 0.6)
+
+ggplot(ap, aes(x = xlab, y = estimate, color = grp)) +  
+  geom_point(position = pd, size = 2) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high),
+                position = pd, width = 0.10) +
+  scale_x_discrete(limits = "overall") +
+  scale_y_continuous(
+  limits = c(0.75, 1),
+  breaks = seq(0.75, 1, by = 0.05)) +
+  scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
+  labs(x = "", y = "Probability of Correct Response", color = "") +
+  theme_medical
 ```
 
 ### efficiency 
@@ -1447,7 +1454,7 @@ per_model
 col_pred  <- "value"   
 col_truth <- "truth"   
 
-# Keep only Metastasis rows and align factor levels
+# only Metastasis rows 
 meta <- optim_sample |>
   filter(task == "Metastasis") |>
   mutate(
@@ -1455,7 +1462,7 @@ meta <- optim_sample |>
     .truth = factor(.data[[col_truth]], levels = c("No","Yes"))
   )
 
-# Build confusion matrices per model (grp) and print them
+# confusion matrices per model (grp)
 cms <- lapply(split(meta, meta$grp), function(d) {
   with(d, table(Extracted = .pred, Truth = .truth))
 })
@@ -1467,12 +1474,12 @@ for (m in names(cms)) {
 
 #sens/spez (human and LLMs)
 ```{r tbl-sens-spez-meta}
-# 1) Metastasis subset + recode truth → Sensitivity/Specificity
+# 1) Metastasis subset 
 dat_meta <- optim_sample |>
   filter(task == "Metastasis") |>
   mutate(truth = if_else(truth == "Yes", "Sensitivity", "Specificity"))
 
-#  order groups like  figures
+#  order groups 
 ord_grp <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
              "mistral-small:24b-instruct-2501-q4_K_M","llama3.3:70b-instruct-q5_K_M")
 dat_meta <- dat_meta |>
@@ -1574,10 +1581,6 @@ cms <- lapply(split(prog, prog$grp), function(d) {
   with(d, table(Extracted = Extracted, Truth = Truth))
 })
 
-# print in preferred order
-ord_grp <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
-             "mistral-small:24b-instruct-2501-q4_K_M","llama3.3:70b-instruct-q5_K_M")
-
 for (m in intersect(ord_grp, names(cms))) {
   cat("\n###", m, "\n")
   print(cms[[m]])
@@ -1591,8 +1594,6 @@ dat_prog <- optim_sample |>
   filter(task == "Response to Treatment") |>
   mutate(truth = if_else(truth == "Progression", "Sensitivity", "Specificity"))
 
-ord_grp <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
-             "mistral-small:24b-instruct-2501-q4_K_M","llama3.3:70b-instruct-q5_K_M")
 dat_prog <- dat_prog |>
   mutate(grp = factor(grp, levels = ord_grp))
 
@@ -1639,9 +1640,6 @@ dat_prog <- optim_sample |>
                      levels = c("Other","Progression"))
   )
 
-# preferred group order
-ord_grp <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
-             "mistral-small:24b-instruct-2501-q4_K_M","llama3.3:70b-instruct-q5_K_M")
 dat_prog <- dat_prog |>
   mutate(grp = factor(grp, levels = ord_grp))
 
