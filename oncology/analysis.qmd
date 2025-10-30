@@ -1714,6 +1714,24 @@ names(sheet_list) <- nm_new
 #cat("Saved to:\n", normalizePath(out_path, winslash = "/"), "\n")
 #if (.Platform$OS.type == "windows") shell.exec(normalizePath(out_path))
 ```
+# Explore mistakes
+```{r}
+rt_mistakes <- gpt_oss_mistakes %>%
+  filter(task == "Response to Treatment")
+
+wrong_pred_counts <- rt_mistakes %>%
+  count(value, name = "n") %>%
+  arrange(desc(n)) %>%
+  mutate(prop = n / sum(n))
+
+wrong_pred_counts
+
+error_combos <- rt_mistakes %>%
+  count(truth, value, name = "n") %>%
+  arrange(desc(n))
+
+error_combos
+```
 
 ### Export
 ```{r}
