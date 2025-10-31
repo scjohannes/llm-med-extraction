@@ -1663,6 +1663,91 @@ gt(sensspec_prog, groupname_col = "truth") |>
   cols_label(
     truth = "Metric",
     grp   = "Group",
+   Estimate = "Estimate (95% CI)"
+  ) |>
+  tab_options(data_row.padding = px(4))
+```
+Version 2. bootstrap
+```{r}
+# 1) prepare Data 
+dat_prog <- optim_sample |>
+  filter(task == "Response to Treatment") |>
+  mutate(
+    truth   = if_else(truth == "Progression", "Sensitivity", "Specificity"),
+    grp     = factor(grp, levels = ord_grp),
+    correct = correct
+  )
+# 2) Modell
+model_prog_sens_spec <- glm(
+  correct ~ truth * grp,
+  data   = dat_prog,
+  family = binomial(link = "logit")
+)
+
+# 3) Punkt-Schätzer (Sens/Spez je truth × grp) 
+point <- avg_predictions(
+  model_prog_sens_spec,
+  by   = c("truth","grp"),
+  type = "response"
+) |>
+  as_tibble() |>
+  select(truth, grp, point = estimate)
+
+# 4) Cluster-Bootstrap auf Ebene 'ier_bk' 
+ids  <- unique(dat_prog$ier_bk)
+n_id <- length(ids)
+
+set.seed(42)
+R <- 100
+boot_draws <- map_dfr(1:R, function(b){
+  samp_ids <- sample(ids, size = n_id, replace = TRUE)                       
+  d_b <- bind_rows(lapply(samp_ids, function(id) filter(dat_prog, ier_bk==id))) 
+  m_b <- glm(correct ~ truth * grp, data = d_b, family = binomial("logit"))
+  avg_predictions(m_b, by = c("truth","grp"), type = "response") |>
+    as_tibble() |> transmute(truth, grp, estimate, .draw = b)
+})
+
+# 5) 95%-KIs aus Quantilen (auf der Response-Skala)
+boot_ci <- boot_draws |>
+  group_by(truth, grp)|>
+  summarise(
+    conf.low  = quantile(estimate, 0.025, na.rm = TRUE),
+    conf.high = quantile(estimate, 0.975, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  left_join(point, by = c("truth","grp")) |>
+  mutate(
+    Estimate = sprintf("%.1f%% (%.1f–%.1f%%)", 100*point, 100*conf.low, 100*conf.high)
+  ) |>
+  select(truth, grp, Estimate) |>
+  arrange(truth, grp)
+
+# 6) Tabelle
+gt(boot_ci, groupname_col = "truth") |>
+  cols_label(truth = "Metric", grp = "Group", Estimate = "Estimate (95% CI)") |>
+  tab_options(data_row.padding = px(4))
+```
+Version 3. bootstrap using marginaleffects
+```{r}
+set.seed(42)
+sensspec_prog_boot <- avg_predictions(
+  model_prog_sens_spec,
+  by   = c("truth","grp"),
+  type = "response"
+) |>
+  inferences(method = "boot", R = 100) |>
+  as_tibble() |>
+  mutate(
+    Estimate = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high)
+  ) |>
+  select(truth, grp, Estimate) |>
+  arrange(truth, grp)
+
+# 3) Tabelle
+gt(sensspec_prog_boot, groupname_col = "truth") |>
+  cols_label(
+    truth    = "Metric",
+    grp      = "Group",
     Estimate = "Estimate (95% CI)"
   ) |>
   tab_options(data_row.padding = px(4))
@@ -1801,6 +1886,5 @@ mistakes <- glm(
     family = binomial(link = "logit")
   )
 plot_predictions(mistakes, by = "report_length", type = "response", vcov = ~ier_bk)
-
-
 ```
+
