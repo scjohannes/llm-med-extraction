@@ -1139,6 +1139,43 @@ plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk
 
 ```
 
+### Bar Plot Metastasis
+
+```{r}
+optim_sample |> 
+  filter(task == "Metastasis") |>
+  mutate(
+    y = case_when(
+      truth == "Yes" & correct == 1 ~ "True Positive",
+      truth == "Yes" & correct == 0 ~ "False Negative",
+      truth == "No"  & correct == 1 ~ "True Negative",
+      truth == "No"  & correct == 0 ~ "False Positive",
+    ),
+    item = gsub("_metastasis$", "", item),
+    item = gsub("_",  " ", item)
+  ) |> 
+    ggplot(aes(x = item, fill = y)) +
+    geom_bar(position = "fill") +
+    scale_fill_manual(
+    values = c(
+      "True Positive"  = "#0868ac", # dark blue
+      "True Negative"  = "#67a9cf", # light blue
+      "False Positive" = "#cb181d", # dark red
+      "False Negative" = "#fb6a4a"  # light red
+    ),
+    drop = FALSE) +
+    facet_wrap(~grp) +
+    coord_flip() +
+    labs(
+      x = "Metastasis Location",
+      y = "Proportion",
+      fill = "Response"
+    ) +
+      theme(
+      legend.position = "bottom"
+      )
+```
+
 ## Secondary endpoints
 
 ### model, predictions and comparisons: task diagnosis, tumorfree
@@ -1404,8 +1441,8 @@ p3 <- ggplot(ap, aes(x = xlab, y = estimate, color = grp)) +
 p1 + p2 + p3 + plot_layout(guides = "collect")  & theme(legend.position = "bottom")
 ```
 
-### efficiency 
-####  human 
+### Time per report 
+####  Human 
 ```{r}
 # --- 1) Start from raw logs ---
 df <- logs$data
