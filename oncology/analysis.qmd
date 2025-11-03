@@ -38,7 +38,6 @@ library(arrow)
 ```{r download-data}
 #| echo: false
 #| output: false
-
 redownload <- TRUE
 
 #if(redownload){
@@ -196,12 +195,11 @@ analysis_data_human |>
   count(task, sort = TRUE) |> 
   tt(width = 1)
 ```
-
-1. PET_CT / MRI&CT
+### Imaging modality
+How many PET-CT scans?
 
 ```{r n-pet}
 #| echo: false
-#How many PET-CT scans?
 analysis_data_human |> 
   filter(pet_ct == TRUE) |>
   select(ier_bk, pet_ct) |>
@@ -209,7 +207,7 @@ analysis_data_human |>
   count() |> 
   pull(n)
 
-
+# prep for table 1
 modality_tbl <- analysis_data_human |>
   distinct(ier_bk, pet_ct) |>
   count(pet_ct, name = "n") |>
@@ -221,16 +219,24 @@ modality_tbl <- analysis_data_human |>
             Category = label,
             Value)
 ```
-2. sex
+### gender
+What was the gender distribution?
 
-3. age
+```{r n-sex}
 
-3. Diagnosis
+```
+### age
+What was the age distribution?
+
+```{r n-age}
+
+```
+
+### diagnosis
+What are the ten most common diagnoses?
 
 ```{r tbl-diagnosis}
 #| echo: false
-
-# What are the ten most common diagnoses?
 analysis_data_human |> 
   filter(task == "Diagnosis") |> 
   select(ier_bk, truth) |> 
@@ -239,7 +245,8 @@ analysis_data_human |>
   head(10)  |> 
   tt(width = 1)
 
-# What are the three most common diagnoses?
+# prep for table 1
+# What are the three most common diagnoses? 
 diag_top3 <- analysis_data_human |>
   filter(task == "Diagnosis") |> 
   distinct(ier_bk, truth) |> 
@@ -252,24 +259,24 @@ diag_top3 <- analysis_data_human |>
             Value)
 
 ```
-
-4. Metastasis
+### meatstasis
+Of how many extracted metastasis-location, did patients have a metastasis?
 
 ```{r tbl-metastasis}
 #| echo: false
-
-# Of how many extracted metastasis-location, did patients have a metastasis?
 analysis_data_human |> 
   filter(task == "Metastasis") |>
   count(value) |> 
   tt(width = 1)
+```
 
+how many patients have at least a metastasis? 
+```{r n-metastasis}
 n_total_patients <- analysis_data_human |>
   distinct(ier_bk) |>
   tally() |>
   pull(n)
 
-# how many patients have at least a metastasis? 
 n_mets_patients <- analysis_data_human |>
   filter(task == "Metastasis") |>
   mutate(truth = tolower(trimws(truth))) |>
@@ -277,12 +284,14 @@ n_mets_patients <- analysis_data_human |>
   distinct(ier_bk) |> 
   nrow()
 
+# prep for table 1
 tbl_mets_any <- tibble::tibble(
   Variable = "Metastasis (patients)",
   Category = "Any metastasis",
   Value = sprintf("%d (%.1f%%)", n_mets_patients, 100 * n_mets_patients / n_total_patients)
 )
 
+# prep for table 1
 #  Top 3 lok. of metastasis
 tbl_mets_top3 <- analysis_data_human |>
   filter(task == "Metastasis") |>
@@ -298,19 +307,10 @@ tbl_mets_top3 <- analysis_data_human |>
             Value)
 ```
 
-5. Response to treatment
-
+### Response to treatment
+How many patients had response, SD, progression? 
 ```{r tbl-response-to-treatment}
 #| echo: false
-#How many patients had response, stable disease or progression?
-#analysis_data_human |> 
-#  group_by(pet_ct) |> 
-#  filter(task == "Response to Treatment") |>
-#  count(value) |> 
-#  arrange(pet_ct, desc(n)) |> 
-#  tt(width = 1)
-
-# How many patients had response, SD, progression? 
 analysis_data_human |>
   filter(task == "Response to Treatment") |>
   distinct(ier_bk, pet_ct, truth) |>
@@ -321,6 +321,7 @@ analysis_data_human |>
   ungroup() |>
   tt(width = 1)
 
+#prep for table 1
 resp_tbl <- analysis_data_human |>
   filter(task == "Response to Treatment") |>
   distinct(ier_bk, pet_ct, truth) |>
@@ -340,7 +341,8 @@ resp_tbl <- analysis_data_human |>
   select(Variable, Category, Value)
 ```
 
-6. Tumor-free status: yes/no/na
+### Tumor-free status
+
 ```{r tb-tumor_free-yes-no-na}
 #| echo: false
 
