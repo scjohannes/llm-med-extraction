@@ -52,3 +52,5 @@ rsconnect/
 /output/
 oncology/analysis.pdf
 oncology/backup/
+
+.DS_Stores
