@@ -31,6 +31,8 @@ library(scales)
 library(gt)
 library(patchwork)
 library(writexl)
+library(here)
+library(arrow)
 ```
 
 ```{r download-data}
@@ -164,6 +166,10 @@ analysis_data_human <- analysis_data_human |>
     body_region_grouped = fct_lump_n(body_region, n = 6, other_level = "Other"),
     #add the length of each report
   )
+
+write_parquet(analysis_data, sink = here("data","oncology","analysis_data.parquet"))
+
+data <- read_parquet(here("data","oncology","analysis_data.parquet"))
 ```
 
 ## Overview of the Data
@@ -1764,6 +1770,7 @@ gt(boot_ci, groupname_col = "truth") |>
   cols_label(truth = "Metric", grp = "Group", Estimate = "Estimate (95% CI)") |>
   tab_options(data_row.padding = px(4))
 ```
+
 Version 3. bootstrap using marginaleffects
 ```{r}
 set.seed(42)
