@@ -678,7 +678,8 @@ gt::gtsave(pred_tbl_2, filename = "Accuracy_table_secondary.docx", path = out_di
  
 ## Diagnostic performance and predictive values as exploratory metrics
 
-### Metastasis - Table sens/spez/ppv/npv (human and LLMs)
+### Metastasis 
+#### Table sens/spez/ppv/npv (human and LLMs)
 
 ```{r tbl-ppv-npv-meta}
 #| echo: false
@@ -792,7 +793,31 @@ dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 gt::gtsave(tbl_metrics, filename = "Metastasis_metrics_SensSpec_PPVNPV.docx", path = out_dir)
 ```
 
-### Progression vs Other. -  Table sens/spez/ppv/npv (human and LLMs)
+##### confusion matrix (human and LLMs (n=300 reports))
+```{r}
+col_pred  <- "value"   
+col_truth <- "truth"   
+
+# only Metastasis rows 
+meta <- optim_sample |>
+  filter(task == "Metastasis") |>
+  mutate(
+    .pred  = factor(.data[[col_pred]],  levels = c("No","Yes")),
+    .truth = factor(.data[[col_truth]], levels = c("No","Yes"))
+  )
+
+# confusion matrices per model (grp)
+cms <- lapply(split(meta, meta$grp), function(d) {
+  with(d, table(Extracted = .pred, Truth = .truth))
+})
+for (m in names(cms)) {
+  cat("\n###", m, "\n")
+  print(cms[[m]])
+}
+```
+
+### Progression vs Other. 
+####Table sens/spez/ppv/npv (human and LLMs)
 
 ```{r tbl-ppv-npv-rtt}
 #| echo: false
@@ -913,10 +938,31 @@ gt::gtsave(tbl_prog_metrics,
            path = out_dir)
 ```
 
+##### Confusion matrix (human and LLMs) 
+```{r}
+prog <- optim_sample |>
+  filter(task == "Response to Treatment") |>
+  mutate(
+    Truth     = factor(if_else(truth == "Progression", "Progression", "Other"),
+                       levels = c("Other","Progression")),
+    Extracted = factor(if_else(value == "Progression", "Progression", "Other"),
+                       levels = c("Other","Progression"))
+  )
+
+cms <- lapply(split(prog, prog$grp), function(d) {
+  with(d, table(Extracted = Extracted, Truth = Truth))
+})
+
+for (m in intersect(ord_grp, names(cms))) {
+  cat("\n###", m, "\n")
+  print(cms[[m]])
+}
+```
+
  {{< pagebreak >}}
  
-### Time per report 
-####  Human 
+## Time per report 
+###  Human 
 ```{r}
 # --- 1) Start from raw logs ---
 df <- logs$data
@@ -963,7 +1009,7 @@ time <- clean_extractions |>
 time
 ```
 
-#### LLM's 
+### LLM's 
 ```{r}
 llm_eff <- read_csv("./output/oncology/model_iteration_durations.csv") # FIX THIS
 
@@ -996,6 +1042,7 @@ per_model <- bind_rows(
 per_model
 ```
 
+## Export and explore mistakes 
 ## Export gpt:oss mistakes 
 ```{r}
 gpt_oss_mistakes <- optim_sample |>
@@ -1077,193 +1124,6 @@ mistakes <- glm(
 plot_predictions(mistakes, by = "report_length", type = "response", vcov = ~ier_bk)
 ```
 
-### Diagnostic performance and predictive values as exploratory metrics
-#### Metastasis
-##### confusion matrix (human and LLMs (n=300 reports))
-```{r}
-col_pred  <- "value"   
-col_truth <- "truth"   
-
-# only Metastasis rows 
-meta <- optim_sample |>
-  filter(task == "Metastasis") |>
-  mutate(
-    .pred  = factor(.data[[col_pred]],  levels = c("No","Yes")),
-    .truth = factor(.data[[col_truth]], levels = c("No","Yes"))
-  )
-
-# confusion matrices per model (grp)
-cms <- lapply(split(meta, meta$grp), function(d) {
-  with(d, table(Extracted = .pred, Truth = .truth))
-})
-for (m in names(cms)) {
-  cat("\n###", m, "\n")
-  print(cms[[m]])
-}
-```
-
-#### Progression vs Other.
-##### Confusion matrix (human and LLMs) 
-```{r}
-prog <- optim_sample |>
-  filter(task == "Response to Treatment") |>
-  mutate(
-    Truth     = factor(if_else(truth == "Progression", "Progression", "Other"),
-                       levels = c("Other","Progression")),
-    Extracted = factor(if_else(value == "Progression", "Progression", "Other"),
-                       levels = c("Other","Progression"))
-  )
-
-cms <- lapply(split(prog, prog$grp), function(d) {
-  with(d, table(Extracted = Extracted, Truth = Truth))
-})
-
-for (m in intersect(ord_grp, names(cms))) {
-  cat("\n###", m, "\n")
-  print(cms[[m]])
-}
-```
-
-
-#### Bar Plot Metastasis
-
-```{r}
-optim_sample |> 
-  filter(task == "Metastasis") |>
-  mutate(
-    y = case_when(
-      truth == "Yes" & correct == 1 ~ "True Positive",
-      truth == "Yes" & correct == 0 ~ "False Negative",
-      truth == "No"  & correct == 1 ~ "True Negative",
-      truth == "No"  & correct == 0 ~ "False Positive",
-    ),
-    item = gsub("_metastasis$", "", item),
-    item = gsub("_",  " ", item)
-  ) |> 
-    ggplot(aes(x = item, fill = y)) +
-    geom_bar(position = "fill") +
-    scale_fill_manual(
-    values = c(
-      "True Positive"  = "#0868ac", # dark blue
-      "True Negative"  = "#67a9cf", # light blue
-      "False Positive" = "#cb181d", # dark red
-      "False Negative" = "#fb6a4a"  # light red
-    ),
-    drop = FALSE) +
-    facet_wrap(~grp) +
-    coord_flip() +
-    labs(
-      x = "Metastasis Location",
-      y = "Proportion",
-      fill = "Response"
-    ) +
-      theme(
-      legend.position = "bottom"
-      )
-```
 
 
 
-#bootstrap CI versions
-```{r tbl-sens-spez-prog}
-#| echo: false
-
-# 1) Prepare data: task = Response to Treatment, recode truth -> Sensitivity/Specificity
-dat_prog <- optim_sample |>
-  filter(task == "Response to Treatment") |>
-  mutate(truth = if_else(truth == "Progression", "Sensitivity", "Specificity"))
-
-dat_prog <- dat_prog |>
-  mutate(grp = factor(grp, levels = ord_grp))
-
-# 2) Fit model: correctness ~ truth × grp
-model_prog_sens_spec <- glm(
-  correct ~ truth * grp,
-  data = dat_prog,
-  family = binomial(link = "logit")
-)
-
-# 3) Predicted probabilities (== sensitivity/specificity) by truth × grp
-sensspec_prog <- avg_predictions(
-  model_prog_sens_spec,
-  by = c("truth","grp"),
-  type = "response",
-  vcov = ~ ier_bk,     
-  conf_level = 0.95
-) |>
-  data.frame() |>
-  mutate(
-    Estimate = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high)
-  ) |>
-  select(truth, grp, Estimate) |>
-  arrange(truth, grp)
-
-# 4) table 
-gt(sensspec_prog, groupname_col = "truth") |>
-  cols_label(
-    truth = "Metric",
-    grp   = "Group",
-   Estimate = "Estimate (95% CI)"
-  ) |>
-  tab_options(data_row.padding = px(4))
-```
-Version 2. bootstrap
-```{r}
-# 1) prepare Data 
-dat_prog <- optim_sample |>
-  filter(task == "Response to Treatment") |>
-  mutate(
-    truth   = if_else(truth == "Progression", "Sensitivity", "Specificity"),
-    grp     = factor(grp, levels = ord_grp),
-    correct = correct
-  )
-# 2) Modell
-model_prog_sens_spec <- glm(
-  correct ~ truth * grp,
-  data   = dat_prog,
-  family = binomial(link = "logit")
-)
-
-# 3) Punkt-Schätzer (Sens/Spez je truth × grp) 
-point <- avg_predictions(
-  model_prog_sens_spec,
-  by   = c("truth","grp"),
-  type = "response"
-) |>
-  as_tibble() |>
-  select(truth, grp, point = estimate)
-
-# 4) Cluster-Bootstrap auf Ebene 'ier_bk' 
-ids  <- unique(dat_prog$ier_bk)
-n_id <- length(ids)
-
-set.seed(42)
-R <- 100
-boot_draws <- map_dfr(1:R, function(b){
-  samp_ids <- sample(ids, size = n_id, replace = TRUE)                       
-  d_b <- bind_rows(lapply(samp_ids, function(id) filter(dat_prog, ier_bk==id))) 
-  m_b <- glm(correct ~ truth * grp, data = d_b, family = binomial("logit"))
-  avg_predictions(m_b, by = c("truth","grp"), type = "response") |>
-    as_tibble() |> transmute(truth, grp, estimate, .draw = b)
-})
-
-# 5) 95%-KIs aus Quantilen (auf der Response-Skala)
-boot_ci <- boot_draws |>
-  group_by(truth, grp)|>
-  summarise(
-    conf.low  = quantile(estimate, 0.025, na.rm = TRUE),
-    conf.high = quantile(estimate, 0.975, na.rm = TRUE),
-    .groups = "drop"
-  ) |>
-  left_join(point, by = c("truth","grp")) |>
-  mutate(
-    Estimate = sprintf("%.1f%% (%.1f–%.1f%%)", 100*point, 100*conf.low, 100*conf.high)
-  ) |>
-  select(truth, grp, Estimate) |>
-  arrange(truth, grp)
-
-# 6) Tabelle
-gt(boot_ci, groupname_col = "truth") |>
-  cols_label(truth = "Metric", grp = "Group", Estimate = "Estimate (95% CI)") |>
-  tab_options(data_row.padding = px(4))
-```
