@@ -28,14 +28,12 @@ From how many imaging reports was data extracted?
 #| echo: false
 n_distinct(analysis_data_human$ier_bk)
 ```
-
 How many items (data points) does our dataset contain?
 
 ```{r n-data-points}
 #| echo: false
 nrow(analysis_data_human)
 ```
-
 Extractors had four main tasks: Extraction of diagnosis, metastasis, response to treatment and radiological absence of a tumor. How many items were extracted per task?
 
 ```{r tbl-n-per-task}
@@ -44,9 +42,9 @@ analysis_data_human |>
   count(task, sort = TRUE) |> 
   tt(width = 1)
 ```
-
 ### Imaging modality
 How many PET-CT scans?
+
 ```{r n-pet}
 #| echo: false
 analysis_data_human |> 
@@ -109,9 +107,9 @@ analysis_data_human |>
   ungroup() |>
   tt(width = 1)
 ```
-
 ### Tumor-free status
 How many patients had tumor-free status yes, no or na? 
+
 ```{r tbl-tfs}
 #| echo: false
 analysis_data_human |>
@@ -124,7 +122,7 @@ analysis_data_human |>
   tt(width = 1)
 ```
 ### Generally
-Median report length with IQR
+Median report length with IQR:
 
 ```{r n-report_length}
 analysis_data_human |>
@@ -136,7 +134,6 @@ analysis_data_human |>
   ) |>
   tt(width = 1)
 ```
-
 How many extractions per extractor?
 
 ```{r tbl-extractors}
@@ -150,7 +147,6 @@ analysis_data_human |>
   arrange(desc(n)) |> 
   tt(width = 1)
 ```
-
 Did students and MDs extract different types of reports?
 
 ```{r tbl-extractor-x-region}
@@ -176,7 +172,6 @@ analysis_data_human |>
   arrange(body_region_grouped) |> 
   tt(width = 1)
 ```
-
 Did one group extract longer vs shorter reports?
 
 ```{r tbl-report-length}
@@ -193,20 +188,18 @@ analysis_data_human |>
 
 {{< pagebreak >}}
 
-
 ## Human Performance
-
 ### Overall and Task Accuracy
 
 Model used for overall accuracy. We use cluster robust standard errors when making predictions.
 
-```{r}
+```{r model-accuracy-human-overall}
+#| echo: false
+#| output: false
 model_acc <- glm(
     correct ~ task,
     data = analysis_data_human,
-    family = binomial(link = "logit")
-  )
-
+    family = binomial(link = "logit"))
 
 # accuracy
 model_acc <- glm(
@@ -214,24 +207,19 @@ model_acc <- glm(
     data = analysis_data_human,
     family = binomial(link = "logit")
   )
-
 summary(model_acc)
 ```
-
 What is the overall accuracy across all tasks?
 
-```{r}
-# Overall Accuracy
+```{r accuracy-human-overall}
+#| echo: false
 avg_predictions(model_acc, type = "response", vcov = ~ier_bk)
 ```
-
 What is the accuracy by task?
 
-```{r}
+```{r accuracy-human-by-task}
 #| echo: false
 #| output: false
-
-# Accuracy by Task
 avg_predictions(model_acc, by = "task", type = "response", vcov = ~ier_bk)
 avg_predictions(model_acc, by = c("task", "pet_ct"), type = "response", vcov = ~ier_bk)
 avg_predictions(model_acc, by = "task", type = "response", vcov = ~ier_bk)
@@ -265,11 +253,12 @@ plot_predictions(model_acc, by = c("task", "pet_ct"), type = "response", vcov = 
     theme(legend.position = "bottom")
 ```
 
-### Diagnosis Accuracy
+### Diagnosis 
+#### Accuracy
 
-Model used for inference.
+Model used.
 
-```{r}
+```{r model}
 model_acc_diag <- glm(
     correct ~ value,
     data = analysis_data_human |> filter(task == "Diagnosis") |> mutate(value = fct_lump_min(value, min = 10)),
@@ -277,7 +266,7 @@ model_acc_diag <- glm(
   )
 ```
 
-```{r}
+```{r accuracy-human-diagnosis}
 #| echo: false
 #| output: false
 avg_predictions(model_acc_diag, type = "response", vcov = ~ier_bk)
@@ -301,12 +290,11 @@ plot_predictions(model_acc_diag, by = "value", type = "response", vcov = ~ier_bk
 We need to examine what's going on with the 'No Malignant Disease', 'Kidney Tumor', and 'Gastric Cancer'.
 
 ### Response to Treatment
-
 #### Accuracy
 
-Model used for non PET-CT scans
+Model used for non PET-CT scans.
 
-```{r}
+```{r model}
 model_rsp_trt <- glm(
     correct ~ value,
     data = analysis_data_human |> filter(task == "Response to Treatment", pet_ct == FALSE),
@@ -316,7 +304,7 @@ model_rsp_trt <- glm(
 summary(model_rsp_trt)
 ```
 
-```{r}
+```{r accuracy-human-responsetotreatment-non-pet}
 #| echo: false
 #| output: false
 
@@ -327,7 +315,7 @@ avg_predictions(model_rsp_trt, vcov = ~ier_bk)
 avg_predictions(model_rsp_trt, by = "value", vcov = ~ier_bk)
 ```
 
-```{r}
+```{r fig-accuracy-human-responsetotreatment-non-pet}
 #| echo: false
 #| warning: false
 #| fig-width: 8
@@ -339,7 +327,7 @@ plot_predictions(model_rsp_trt, by = "value", vcov = ~ier_bk) +
 
 Model used for PET-CT scans
 
-```{r}
+```{r model}
 model_rsp_trt_pet <- glm(
     correct ~ value,
     data = analysis_data_human |> filter(task == "Response to Treatment", pet_ct == T),
@@ -349,7 +337,7 @@ model_rsp_trt_pet <- glm(
 summary(model_rsp_trt_pet)
 ```
 
-```{r}
+```{r accuracy-human-responsetotreatment-pet}
 #| echo: false
 #| output: false
 avg_predictions(model_rsp_trt_pet, vcov = ~ier_bk)
@@ -358,18 +346,18 @@ avg_predictions(model_rsp_trt_pet, by = "value", vcov = ~ier_bk)
 
 CI go above 1, which shouldn't happen. Maybe because of delta method used by `marginaleffects`? Stable Disease seems to have been impossible to extract correctly for PET-CT scans (?)
 
-```{r}
+```{r fig-accuracy-human-responsetotreatment-pet}
 #| echo: false
 #| warning: false
 #| fig-width: 8
 #| fig-height: 6
+#| fig-cap: "Accuracy by Extractor Response for Response to Treatment (PET-CT scans)"
 # CI above 0, because of delta method? 
 plot_predictions(model_rsp_trt_pet, by = "value", vcov = ~ier_bk) +
     scale_y_continuous(limits = c(-0.2, 1.1), breaks = seq(0, 1, by = 0.25))
 ```
 
 #### PPV / NPV
-
 Confusion Matrix for Progression
 
 ```{r}
@@ -420,7 +408,6 @@ avg_predictions(model_progr_npv, type = "response", vcov = ~ier_bk)
 ```
 
 ### Metastasis
-
 #### Sensitivy and Specificty
 
 Confusion Matrix
@@ -563,6 +550,371 @@ plot_predictions(model_md_stud, by = c("task", "human_group"), variable = "human
 
 {{< pagebreak >}}
 
+## Human vs. LLM 
+### Secondary endpoints
+
+```{r model, predictions and comparisons: task diagnosis, tumorfree}
+#| echo: false
+#| output: false
+
+m_acc2 <- glm(
+    correct ~ grp * task,
+    data = analysis_sample  |> filter(task == "Diagnosis" | task == "Radiologically Tumor Free"),
+    family = binomial(link = "logit")
+  )
+
+avg_predictions(m_acc2, by = c("grp", "task"), type = "response", vcov = ~ier_bk)
+avg_comparisons(m_acc2, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
+```
+
+```{r model, predictions and comparisons: overall accuracy}
+#| echo: false
+#| output: false
+
+m_acc3 <- glm(
+    correct ~ grp * task,
+    data = analysis_sample, 
+    family = binomial(link = "logit") )
+
+avg_predictions(m_acc3,by = "grp", type = "response", vcov = ~ ier_bk)
+avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
+```
+
+#### Table for predictions and comparisons
+
+```{r tbl-acc-secondary-endpoints}
+#| echo: false
+
+# --- Display order for groups and tasks --------------------------------------
+ord_grp  <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
+              "mistral-small:24b","llama3.3:70b")
+ord_task <- c("Diagnosis","Radiologically Tumor Free","Overall")
+
+# --- Predicted accuracies by task × group-----------------
+pred_task <- avg_predictions(
+  m_acc2, by = c("grp","task"), type = "response",
+  vcov = ~ier_bk) |>
+  data.frame() |>
+  transmute(
+    task, grp,
+    Accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high)
+  )
+# --- Predicted overall accuracies by group ---------------------------------
+pred_overall <- avg_predictions(
+  m_acc3, by = "grp", type = "response",
+  vcov = ~ier_bk) |>
+  data.frame() |>
+  mutate(task = "Overall") |>
+  transmute(
+    task, grp,
+    Accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high)
+  )
+
+pred_all <- bind_rows(pred_task, pred_overall)
+
+# --- Model vs. human comparisons within each task --------------------------
+comp_task <- avg_comparisons(
+  m_acc2, variable = "grp", by = "task", type = "response",
+  vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9) |>
+  data.frame() |>
+  mutate(
+    grp = str_replace(contrast, "\\s*-\\s*human$", ""),
+    noninferior = conf.low > -0.05
+  ) |>
+  transmute(
+    task, grp,
+    `Model vs human` = sprintf("%+.1f pp (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
+    `NI (Δ > -5pp)`  = if_else(noninferior, "yes", "no")
+  )
+# --- Overall comparisons vs human -----------------------------------------
+comp_overall <- avg_comparisons(
+  m_acc3, variable = "grp", type = "response",
+  vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.95) |>
+  data.frame() |>
+  mutate(
+    task = "Overall",
+    grp = str_replace(contrast, "\\s*-\\s*human$", ""),
+    noninferior = conf.low > -0.05
+  ) |>
+  transmute(
+    task, grp,
+    `Model vs human` = sprintf("%+.1f pp (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
+    `NI (Δ > -5pp)`  = if_else(noninferior, "yes", "no")
+  )
+
+comp_all <- bind_rows(comp_task, comp_overall)
+
+ # --- Assemble table data -------------------------------------------------
+tab_all <- pred_all |>
+  left_join(comp_all, by = c("task","grp")) |>
+  mutate(
+    task = factor(task, levels = ord_task),
+    grp  = factor(grp,  levels = ord_grp)
+  ) |>
+  arrange(task, grp) |>
+  mutate(
+    `Model vs human` = if_else(grp == "human", "", `Model vs human`),
+    `NI (Δ > -5pp)`  = if_else(grp == "human", "", `NI (Δ > -5pp)`)
+  ) |>
+  select(task, grp, Accuracy, `Model vs human`, `NI (Δ > -5pp)`)
+
+# --- Build gt table --------------------------------------------------------
+pred_tbl_2 <- gt(tab_all, groupname_col = "task") |>
+  cols_label(
+    task = "Task", grp = "Group",
+    Accuracy = "Accuracy (95% CI)",
+    `Model vs human` = "Difference vs human (pp)",
+    `NI (Δ > -5pp)`  = "Non-inferior?"
+  ) |>
+  tab_options(data_row.padding = px(4))
+
+# --- Export table -----------------------------------------------------------
+out_dir <- here::here("output", "oncology", "figures")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+gt::gtsave(pred_tbl_2, filename = "Accuracy_table_secondary.docx", path = out_dir)
+```
+
+{{< pagebreak >}}
+ 
+## Diagnostic performance and predictive values as exploratory metrics
+
+### Metastasis - Table sens/spez/ppv/npv (human and LLMs)
+
+```{r tbl-ppv-npv-meta}
+#| echo: false
+
+# --- 1) Subset to Metastasis -------------------------------------------------
+dat_meta <- analysis_sample |>
+  filter(task == "Metastasis") |>
+  mutate(truth = if_else(truth == "Yes", "Sensitivity", "Specificity"))
+
+# Desired row order for models/groups
+ord_grp <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
+             "mistral-small:24b","llama3.3:70b")
+
+# Apply the ordering
+dat_meta <- dat_meta |>
+  mutate(grp = factor(grp, levels = ord_grp))
+
+# --- 2) Model for Sensitivity/Specificity ------------------------------------
+model_meta_sens_spec_llm <- glm(
+  correct ~ truth * grp,
+  data = dat_meta,
+  family = binomial(link = "logit")
+)
+
+# Predicted probabilities 
+sensspec_llm <- avg_predictions(
+  model_meta_sens_spec_llm,
+  by   = c("truth","grp"),
+  type = "response",
+  vcov = ~ ier_bk,
+  conf_level = 0.95
+) |>
+  data.frame() |>
+  mutate(
+    Estimate = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high)
+  ) |>
+  select(truth, grp, Estimate) |>
+  arrange(truth, grp)
+
+# Pivot wide so columns become: Sensitivity, Specificity
+sensspec_wide <- sensspec_llm |>
+  mutate(truth = factor(truth, levels = c("Sensitivity","Specificity"))) |>
+  pivot_wider(names_from = truth, values_from = Estimate)
+
+# --- 3) Model for PPV/NPV -----------------------------------------------------
+dat_meta2 <- analysis_sample |>
+  filter(task == "Metastasis") |>
+  mutate(
+    truth01 = if_else(truth == "Yes", 1, 0),
+    value   = factor(value, levels = c("No","Yes"))
+  )
+
+model_ppv_npv <- glm(
+  truth01 ~ value * grp,
+  data = dat_meta2,
+  family = binomial(link = "logit")
+)
+
+# Predicted probabilities 
+pred_val_grp <- marginaleffects::avg_predictions(
+  model_ppv_npv,
+  by = c("value","grp"),
+  type = "response",
+  vcov = ~ ier_bk,
+  conf_level = 0.95
+) |>
+  data.frame()
+
+
+ppv_npv <- pred_val_grp |>
+  mutate(
+    Metric   = if_else(value == "Yes", "PPV", "NPV"),
+    Estimate = if_else(Metric == "PPV", estimate, 1 - estimate),
+    LCL      = if_else(Metric == "PPV", conf.low, 1 - conf.high),
+    UCL      = if_else(Metric == "PPV", conf.high, 1 - conf.low)
+  ) |>
+  transmute(
+    grp, Metric,
+    pretty = sprintf("%.1f%% (%.1f–%.1f%%)", 100*Estimate, 100*LCL, 100*UCL)
+  ) |>
+  arrange(Metric, grp) |>
+  pivot_wider(names_from = Metric, values_from = pretty) |>
+  arrange(factor(grp, levels = ord_grp))
+
+# --- 4) Join into a single table: rows = models, cols = four metrics ----------
+metrics_all <- sensspec_wide |>
+  left_join(ppv_npv, by = "grp") |>
+  mutate(grp = factor(grp, levels = ord_grp)) |>
+  arrange(grp) |>
+  select(grp, Sensitivity, Specificity, PPV, NPV)
+
+# Build gt table with centered metric columns and a clear title
+tbl_metrics <- gt(metrics_all) |>
+  cols_label(
+    grp         = "Group",
+    Sensitivity = "Sensitivity (95% CI)",
+    Specificity = "Specificity (95% CI)",
+    PPV         = "PPV (95% CI)",
+    NPV         = "NPV (95% CI)"
+  ) |>
+  cols_align(align = "center", columns = c(Sensitivity, Specificity, PPV, NPV)) |>
+  tab_options(data_row.padding = px(4)) |>
+  tab_header(title = md("**Metastasis: Sensitivity / Specificity / PPV / NPV**"))
+
+# Preview
+tbl_metrics
+
+# --- 5) Export table ----------------------------------------------------------
+out_dir <- here::here("output", "oncology", "figures")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+gt::gtsave(tbl_metrics, filename = "Metastasis_metrics_SensSpec_PPVNPV.docx", path = out_dir)
+```
+
+### Progression vs Other. -  Table sens/spez/ppv/npv (human and LLMs)
+
+```{r tbl-ppv-npv-rtt}
+#| echo: false
+# --------------------------
+# A) Sensitivity / Specificity (bootstrapped) for Response to Treatment
+# --------------------------
+# Data
+dat_prog <- analysis_sample |>
+  filter(task == "Response to Treatment") |>
+  mutate(
+    truth = if_else(truth == "Progression", "Sensitivity", "Specificity"),
+    truth = factor(truth, levels = c("Sensitivity","Specificity")),
+    grp   = factor(grp, levels = ord_grp)
+  )
+
+# Model
+model_prog_sens_spec <- glm(
+  correct ~ truth * grp,
+  data   = dat_prog,
+  family = binomial(link = "logit")
+)
+
+# Bootstrapped predicted probabilities (95% CI)
+set.seed(42)
+sensspec_prog_boot <- marginaleffects::avg_predictions(
+  model_prog_sens_spec,
+  by   = c("truth","grp"),
+  type = "response"
+) |>
+  marginaleffects::inferences(method = "boot", R = 100) |>
+  as_tibble() |>
+  mutate(
+    Estimate = sprintf("%.1f%% (%.1f–%.1f%%)",
+                       100*estimate, 100*conf.low, 100*conf.high)
+  ) |>
+  select(truth, grp, Estimate) |>
+  arrange(truth, grp)
+
+# Wide: columns = Sensitivity, Specificity
+sensspec_prog_wide <- sensspec_prog_boot |>
+  pivot_wider(names_from = truth, values_from = Estimate)
+
+# --------------------------
+# B) PPV / NPV (bootstrapped) for Response to Treatment
+# --------------------------
+# Data for PPV/NPV model
+dat_prog_ppvnpv <- analysis_sample |>
+  filter(task == "Response to Treatment") |>
+  mutate(
+    truth01 = if_else(truth == "Progression", 1, 0),            # binary gold-standard
+    value   = factor(if_else(value == "Progression", "Progression", "Other"),
+                     levels = c("Other","Progression")),
+    grp     = factor(grp, levels = ord_grp)
+  )
+
+# Model: truth01 ~ value * grp
+model_ppv_npv_prog <- glm(
+  truth01 ~ value * grp,
+  data   = dat_prog_ppvnpv,
+  family = binomial(link = "logit")
+)
+
+# Bootstrapped predicted probabilities by value × grp (95% CI)
+set.seed(42)
+pred_val_grp_prog <- marginaleffects::avg_predictions(
+  model_ppv_npv_prog,
+  by = c("value","grp"),
+  type = "response"
+) |>
+  marginaleffects::inferences(method = "boot", R = 100) |>
+  as_tibble()
+
+# Map to PPV/NPV and format CI (NPV uses 1 - p and flipped bounds)
+ppv_npv_prog_wide <- pred_val_grp_prog |>
+  mutate(
+    Metric   = if_else(value == "Progression", "PPV", "NPV"),
+    Estimate = if_else(Metric == "PPV", estimate, 1 - estimate),
+    LCL      = if_else(Metric == "PPV", conf.low, 1 - conf.high),
+    UCL      = if_else(Metric == "PPV", conf.high, 1 - conf.low),
+    pretty   = sprintf("%.1f%% (%.1f–%.1f%%)", 100*Estimate, 100*LCL, 100*UCL)
+  ) |>
+  transmute(grp, Metric, pretty) |>
+  arrange(Metric, grp) |>
+  pivot_wider(names_from = Metric, values_from = pretty) |>
+  arrange(factor(grp, levels = ord_grp))
+
+# --------------------------
+# C) One table: rows = grp (models), cols = Sens, Spec, PPV, NPV
+# --------------------------
+metrics_prog <- sensspec_prog_wide |>
+  left_join(ppv_npv_prog_wide, by = "grp") |>
+  mutate(grp = factor(grp, levels = ord_grp)) |>
+  arrange(grp) |>
+  select(grp, Sensitivity, Specificity, PPV, NPV)
+
+tbl_prog_metrics <- gt(metrics_prog) |>
+  cols_label(
+    grp         = "Group",
+    Sensitivity = "Sensitivity (95% CI)",
+    Specificity = "Specificity (95% CI)",
+    PPV         = "PPV (95% CI)",
+    NPV         = "NPV (95% CI)"
+  ) |>
+  cols_align("center", c(Sensitivity, Specificity, PPV, NPV)) |>
+  tab_options(data_row.padding = px(4)) |>
+  tab_header(title = md("**Response to Treatment: Sensitivity / Specificity / PPV / NPV**"))
+
+# Preview
+tbl_prog_metrics
+
+# --------------------------
+# D) Export 
+# --------------------------
+out_dir <- here::here("output", "oncology", "figures")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+gt::gtsave(tbl_prog_metrics,
+           filename = "RtT_metrics_SensSpec_PPVNPV.docx",
+           path = out_dir)
+```
+
+ {{< pagebreak >}}
+ 
 ### Time per report 
 ####  Human 
 ```{r}

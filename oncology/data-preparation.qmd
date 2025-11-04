@@ -112,6 +112,8 @@ ground_truth_long <- long_data |>
       )
     )
 
+saveRDS(ground_truth_long, here( "data", "oncology", "ground_truth_long.rds"))
+
 analysis_data <- long_data |> 
     filter(redcap_event_name != "Ground Truth") |> 
     group_by(ier_bk, redcap_event_name) |>
