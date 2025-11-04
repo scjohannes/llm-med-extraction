@@ -394,7 +394,7 @@ ggsave(
 
 #### Accuracy by task and group
 
-```{r fig-acc-primary-endpoints}
+```{r fig-acc-primary-endpoints-split}
 #| fig-width: 8
 #| fig-height: 6
 #| fig-cap: "Accuracy by Task and Group (Human vs LLM)"
@@ -421,27 +421,55 @@ ord_legend <- c(
   "llama3.3:70b-instruct-q5_K_M"
 )
 
-# --- Figure: predicted probabilities by task × group -------------------------
-p_acc <- plot_predictions(m_acc, by = c("task", "grp"), type = "response", vcov = ~ier_bk) +
-  scale_y_continuous(
-  limits = c(0.5, 1),
-  breaks = seq(0.5, 1, by = 0.1)) +
+# --- PLOT A: Metastasis ------------------------------------------------------
+pA <- plot_predictions(
+  m_acc,
+  newdata = optim_sample |> dplyr::filter(task == "Metastasis"),
+  by = c("task", "grp"),
+  type = "response",
+  vcov = ~ ier_bk
+) +
+  scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, by = 0.1)) +
   scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
   scale_fill_manual(values = okabe_ito_named,  breaks = ord_legend, drop = FALSE) +
-  labs(x = "Task", y = "Probability of Correct Response", color = "") +
-  theme_medical(
-  ) + 
+  labs(x = "Metastasis", y = "Probability of Correct Response", color = "") +
+  theme_medical() +
   theme(
-    panel.grid.major.y = element_line()
+    panel.grid.major.y = element_line(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_blank()
   )
-# Preview in the document
-p_acc
 
-# --- Export table -------------------------------------------------------------
+# --- PLOT B: Response to Treatment -------------------------------------------
+pB <- plot_predictions(
+  m_acc,
+  newdata = optim_sample |> dplyr::filter(task == "Response to Treatment"),
+  by = c("task", "grp"),
+  type = "response",
+  vcov = ~ ier_bk
+) +
+  scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, by = 0.1)) +
+  scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
+  scale_fill_manual(values = okabe_ito_named,  breaks = ord_legend, drop = FALSE) +
+  labs(x = "Response to Treatment", y = NULL, color = "") +
+  theme_medical() +
+  theme(
+    panel.grid.major.y = element_line(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_blank()
+  )
+
+# --- COMBINE: stack vertically and collect a single legend at the bottom -----
+combined_primary <- pA + pB + plot_layout(guides = "collect") & theme(legend.position = "bottom")
+
+# Preview
+combined_primary
+
+# --- SAVE --------------------------------------------------------------------
 ggsave(
   filename = here::here("output", "oncology", "figures", "primary_accuracy.png"),
-  plot = p_acc,
-  width = 8, height = 8, dpi = 300
+  plot = combined_primary,
+  width = 8, height = 6, dpi = 300
 )
 ```
 
@@ -664,7 +692,7 @@ combined_sec
 ggsave(
   filename = here("output", "oncology", "figures", "secondary_contrast.png"),
   plot = combined_sec,
-  width = 8, height = 12, dpi = 300
+  width = 8, height = 10.5, dpi = 300
 )
 ```
 
