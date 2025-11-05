@@ -1,5 +1,6 @@
 ---
-title: LLM-Extraction Project - data preparation
+title: LLM-Extraction Project
+subtitle: Data Preparation
 author: "Johannes Schwenke"
 date: today
 format: 
@@ -13,10 +14,10 @@ format:
     columns: 1
     tbl-cap-location: bottom
 ---
-{{< pagebreak >}}
+
+## Setup
 
 ```{r setup}
-#| echo: false
 #| output: false
 library(tidyverse)
 library(marginaleffects)
@@ -34,12 +35,13 @@ library(here)
 library(arrow)
 ```
 
+## Download Data from REDCap
+
 ```{r download-data}
-#| echo: false
 #| output: false
 redownload <- TRUE
 
-#if(redownload){
+if(redownload){
   data <- redcap_read(
     redcap_uri = Sys.getenv("redcap_fxdb_url"),
     token = Sys.getenv("llm_radio_api"),
@@ -47,9 +49,9 @@ redownload <- TRUE
   )$data
 
 # saveRDS(data, "./data/oncology/redcap_export_complete.rds")
-#} else {
-# 3  data <- readRDS("./data/oncology/redcap-2025-10-09-labels.rds")$data
-#}
+} else {
+  data <- readRDS("./data/oncology/redcap-2025-10-09-labels.rds")$data
+}
 
 logs <- redcap_log_read(
   redcap_uri = Sys.getenv("redcap_fxdb_url"),
@@ -65,6 +67,8 @@ logs <- redcap_log_read(
   handle_httr = NULL
 )
 ```
+
+## Format Data for Analysis
 
 ```{r format-data}
 #| echo: false
@@ -112,8 +116,6 @@ ground_truth_long <- long_data |>
       )
     )
 
-saveRDS(ground_truth_long, here( "data", "oncology", "ground_truth_long.rds"))
-
 analysis_data <- long_data |> 
     filter(redcap_event_name != "Ground Truth") |> 
     group_by(ier_bk, redcap_event_name) |>
@@ -147,11 +149,7 @@ analysis_data_human <- analysis_data |>
 if(any(is.na(analysis_data_human$value))) {
     message("There are NA values in the long_data, which may affect analysis.")
 }
-```
 
-```{r add-md-label}
-#| echo: false
-#| output: false
 all_ids <- na.omit(unique(analysis_data_human$extractor_id))
 md <- c("DH", "AIM", "BT", "AMS")
 stud <- setdiff(all_ids, md)
@@ -166,6 +164,10 @@ analysis_data_human <- analysis_data_human |>
     body_region_grouped = fct_lump_n(body_region, n = 6, other_level = "Other"),
     #add the length of each report
   )
+```
 
+```{r add-md-label}
+write_parquet(ground_truth_long, sink = here( "data", "oncology", "ground_truth_long.parquet"))
 write_parquet(analysis_data, sink = here("data","oncology","analysis_data.parquet"))
+write_parquet(analysis_data_human, sink = here("data","oncology","analysis_data_human.parquet"))
 ```
