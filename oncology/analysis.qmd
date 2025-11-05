@@ -167,7 +167,6 @@ analysis_data_human <- analysis_data_human |>
   )
 
 write_parquet(analysis_data, sink = here("data","oncology","analysis_data.parquet"))
-
 data <- read_parquet(here("data","oncology","analysis_data.parquet"))
 ```
 
