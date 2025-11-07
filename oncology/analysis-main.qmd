@@ -179,7 +179,7 @@ tbl_mets_top4 <- data |>
     Value = sprintf("%d (%.1f%%)", n, 100 * pct)
   ) |>
   transmute(
-    Variable = "Metastasis localization",
+    Variable = "Metastasis location",
     Category,
     Value
   )
@@ -237,9 +237,8 @@ tf_tbl <- data |>
 #| echo: false
 table1_df <- bind_rows(
   modality_tbl,
-  diag_top3_other,     
-  tbl_mets_any,
-  tbl_mets_top3,
+  diag_top4_other,     
+  tbl_mets_top4,
   resp_tbl,
   tf_tbl)
 
