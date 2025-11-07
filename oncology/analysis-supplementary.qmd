@@ -1,6 +1,5 @@
 ---
-title: LLM-Extraction Project - supplementary analysis
-author: "Johannes Schwenke"
+title: Supplementary Figures
 date: today
 format: 
   typst:
@@ -9,202 +8,100 @@ format:
       x: 2cm
       y: 2.5cm
     toc: true
-    section-numbering: 1.1.1
     columns: 1
     tbl-cap-location: bottom
 ---
 
-{{< pagebreak >}}
+```{r setup}
+#| echo: false
+#| output: false
+library(here)
+library(arrow)
+library(tidyverse)
+library(marginaleffects)
+library(rsample)
+library(scales)
+library(gt)
+library(writexl)
+```
+
+```{r}
+#| echo: false
+#| output: false
+boot_R <- 100
+```
 
 ```{r}
 #| echo: false
 #| output: false
 data <- read_parquet(here("data","oncology","analysis_data.parquet"))
-```
 
-## Overview of the Data
+logs <- REDCapR::redcap_log_read(
+  redcap_uri = Sys.getenv("redcap_fxdb_url"),
+  token = Sys.getenv("llm_radio_api"),
+  log_begin_date = as.Date("2025-05-01"),
+  log_end_date = as.Date("2025-11-01"),
+  record = NULL,
+  user = NULL,
+  http_response_encoding = "UTF-8",
+  locale = readr::default_locale(),
+  verbose = TRUE,
+  config_options = NULL,
+  handle_httr = NULL
+)
 
-From how many imaging reports was data extracted?
+analysis_data_human <- data |> 
+  filter(!str_detect(redcap_event_name, "LLM"))
 
-```{r n-ier_bk}
-#| echo: false
-n_distinct(analysis_data_human$ier_bk)
-```
+all_ids <- na.omit(unique(analysis_data_human$extractor_id))
+md <- c("DH", "AIM", "BT", "AMS")
+stud <- setdiff(all_ids, md)
 
-How many items (data points) does our dataset contain?
-
-```{r n-data-points}
-#| echo: false
-nrow(analysis_data_human)
-```
-
-Extractors had four main tasks: Extraction of diagnosis, metastasis, response to treatment and radiological absence of a tumor. How many items were extracted per task?
-
-```{r tbl-n-per-task}
-#| echo: false
-analysis_data_human |> 
-  count(task, sort = TRUE) |> 
-  tt(width = 1)
-```
-
-Imaging modality: How many PET-CT scans?
-
-```{r n-pet}
-#| echo: false
-analysis_data_human |> 
-  filter(pet_ct == TRUE) |>
-  select(ier_bk, pet_ct) |>
-  distinct() |> 
-  count() |> 
-  pull(n)
-```
-
-Gender: What was the gender distribution?
-
-```{r n-sex}
-
-```
-
-Age: What was the age distribution?
-
-```{r n-age}
-
-```
-
-Diagnosis: What are the ten most common diagnoses?
-
-```{r tbl-diag}
-#| echo: false
-analysis_data_human |> 
-  filter(task == "Diagnosis") |> 
-  select(ier_bk, truth) |> 
-  distinct() |> 
-  count(truth, sort = TRUE) |> 
-  head(10)  |> 
-  tt(width = 1)
-```
-
-Metastasis: Of how many extracted metastasis-location, did patients have a metastasis?
-
-```{r tbl-metastasis}
-#| echo: false
-analysis_data_human |> 
-  filter(task == "Metastasis") |>
-  count(value) |> 
-  tt(width = 1)
-```
-
-Response to treatment: How many patients had response, SD, progression?
-
-```{r tbl-rtt}
-#| echo: false
-analysis_data_human |>
-  filter(task == "Response to Treatment") |>
-  distinct(ier_bk, pet_ct, truth) |>
-  count(pet_ct, truth, name = "n") |>
-  group_by(pet_ct) |>
-  mutate(pct = round(100 * n / sum(n), 1)) |>
-  arrange(pet_ct, desc(n)) |>
-  ungroup() |>
-  tt(width = 1)
-```
-
-Tumor-free status: How many patients had tumor-free status yes, no or na?
-
-```{r tbl-tfs}
-#| echo: false
-analysis_data_human |>
-  filter(task == "Radiologically Tumor Free") |>
-  distinct(ier_bk, truth) |>
-  count(truth, name = "n") |>
-  mutate(pct = n / sum(n),
-         pct_label = scales::percent(pct, accuracy = 0.1)) |>
-  arrange(desc(n)) |>
-  tt(width = 1)
-```
-
-Generally: Median report length with IQR:
-
-```{r n-report_length}
-analysis_data_human |>
-  distinct(ier_bk, report_length) |>
-  summarise(
-    median_report_length = median(report_length, na.rm = TRUE),
-    min_report_length    = min(report_length, na.rm = TRUE),
-    max_report_length    = max(report_length, na.rm = TRUE)
-  ) |>
-  tt(width = 1)
-```
-
-How many extractions per extractor?
-
-```{r tbl-extractors}
-#| echo: false
-analysis_data_human |> 
-  group_by(extractor_id) |> 
-  summarise(
-    n = n(),
-    .groups = "drop"
-  ) |> 
-  arrange(desc(n)) |> 
-  tt(width = 1)
-```
-
-Did students and MDs extract different types of reports?
-
-```{r tbl-extractor-x-region}
-#| echo: false
-analysis_data_human |> 
-  group_by(human_group, body_region_grouped) |> 
-  summarise(
-    n = n(),
-    .groups = "drop"
-  ) |> 
-  group_by(human_group) |> 
+analysis_data_human <- analysis_data_human |> 
   mutate(
-    prop = round(n / sum(n), digits = 2) 
-  ) |> 
-    select(-n) |>
-  pivot_wider(
-    names_from = human_group,
-    values_from = prop
-  ) |> 
+    human_group = case_when(
+      extractor_id %in% md ~ "MD",
+      extractor_id %in% stud ~ "Stud",
+      TRUE ~ "Unknown"
+    ),
+    body_region_grouped = fct_lump_n(body_region, n = 6, other_level = "Other"),
+    #add the length of each report
+  )
+
+training_ids <- data |> 
+  filter(!is.na(training)) |> 
+  filter(training == "Yes") |> 
+  pull(ier_bk) |> 
+  unique()
+
+data_test <- data |> 
+  filter(!(ier_bk %in% training_ids)) |> 
   mutate(
-    diff = MD - Stud,
-  ) |> 
-  arrange(body_region_grouped) |> 
-  tt(width = 1)
-```
-
-Did one group extract longer vs shorter reports?
-
-```{r tbl-report-length}
-#| echo: false
-analysis_data_human |> 
-  group_by(human_group) |> 
-  summarise(
-    mean_report_length = mean(report_length, na.rm = TRUE),
-    sd_report_length = sd(report_length, na.rm = TRUE),
-    .groups = "drop"
-  ) |> 
-    tt(width = 1)
+    human = if_else(!str_detect(redcap_event_name, "LLM"), 1, 0),
+    grp = case_when(
+      human == 1 ~ "human",
+      model == "llama3.3:70b-instruct-q5_K_M" ~ "llama3.3:70b",
+      model == "mistral-small:24b-instruct-2501-q4_K_M" ~ "mistral-small:24b",
+      model == "rndcalcle01.qwen3:32b" | model == "qwen3:32b" ~ "qwen3:32b",
+      model == "rndcalcle01.qwq:32b" | model == "qwq:32b" ~ "qwq:32b",
+      model == "gpt-oss:120b" ~ "gpt-oss:120b",
+    ),
+    grp = factor(grp, levels = c("human", "llama3.3:70b", "mistral-small:24b", "qwen3:32b", "qwq:32b",  "gpt-oss:120b")))
 ```
 
 {{< pagebreak >}}
 
-## Human Performance
+## Supplementary Figure 1
 
-### Overall and Task Accuracy
+![This figure shows the flow of data in our study. The unstructured radiology reports and metadata are pulled from the Clinical Datawarehouse (CDWH) using a database interface in R and uploaded to the study database hosted on a local REDCap instance. The imaging reports are processed by Large Language Models (LLMs) on a local GPU cluster. For communication between R and the LLMs we use the ellmer package. Abbreviations: CDWH, Clinical Datawarehouse; GPU, Graphics Processing Unit.](images/llm-figs-final-dataflow.png){#fig-data-flow width="13cm"}
 
-Model used for overall accuracy. We use cluster robust standard errors when making predictions.
+{{< pagebreak >}}
+
+## Supplementary Figure 2
 
 ```{r model-accuracy-human-overall}
-model_acc <- glm(
-    correct ~ task,
-    data = analysis_data_human,
-    family = binomial(link = "logit"))
-
-# accuracy
+#| echo: false
+#| output: false
 model_acc <- glm(
     correct ~ task * pet_ct,
     data = analysis_data_human,
@@ -213,58 +110,45 @@ model_acc <- glm(
 summary(model_acc)
 ```
 
-What is the overall accuracy across all tasks?
-
-```{r accuracy-human-overall}
-#| echo: false
-avg_predictions(model_acc, type = "response", vcov = ~ier_bk)
-```
-
-What is the accuracy by task?
-
-```{r accuracy-human-by-task}
-#| echo: false
-#| output: false
-avg_predictions(model_acc, by = "task", type = "response", vcov = ~ier_bk)
-avg_predictions(model_acc, by = c("task", "pet_ct"), type = "response", vcov = ~ier_bk)
-avg_predictions(model_acc, by = "task", type = "response", vcov = ~ier_bk)
-```
-
 ```{r fig-task-accuracy-all}
 #| fig-width: 8
 #| fig-height: 6
-#| fig-cap: "Accuracy by task"
+#| fig-cap: "The plot shows the accuracy with 95% confidence intervals of human extractors compared to the ground truth, stratified by task. "
+#| echo: false
 plot_predictions(model_acc, by = "task", type = "response", vcov = ~ier_bk) + 
   scale_y_continuous(limits = c(0, 1)) +
   labs(
-    x = "Task",
-    y = "Probability of Correct Response"
+    x = "",
+    y = "Accuracy"
   ) 
 ```
 
-Does the accuracy differ between PET-CT and non-PET-CT scans?
+{{< pagebreak >}}
+
+## Supplementary Figure 3
 
 ```{r fig-task-accuracy-pet-ct}
 #| fig-width: 8
 #| fig-height: 6
-#| fig-cap: "Accuracy by task and whether the imaging was a PET-CT scan or not."
+#| fig-cap: "The plot shows the accuracy with 95% confidence intervals of human extractors compared to the ground truth, stratified by task and PET-CT vs non-PET-CT scans."
+#| echo: false
 plot_predictions(model_acc, by = c("task", "pet_ct"), type = "response", vcov = ~ier_bk) + 
   scale_y_continuous(limits = c(0, 1)) +
   labs(
-    x = "Task",
-    y = "Probability of Correct Response",
+    x = "",
+    y = "Accuracy",
     color = "PET-Scan"
   ) +
     theme(legend.position = "bottom")
 ```
 
-### Task: Diagnosis
+{{< pagebreak >}}
 
-#### Accuracy
-
-Model used.
+## Supplementary Figure 4
 
 ```{r model}
+#| echo: false
+#| ouput: false
 model_acc_diag <- glm(
     correct ~ value,
     data = analysis_data_human |> filter(task == "Diagnosis") |> mutate(value = fct_lump_min(value, min = 10)),
@@ -272,36 +156,66 @@ model_acc_diag <- glm(
   )
 ```
 
-```{r accuracy-human-diagnosis}
-#| echo: false
-#| output: false
-avg_predictions(model_acc_diag, type = "response", vcov = ~ier_bk)
-```
-
-What's the accuracy by extracted diagnosis?
-
 ```{r fig-diagnosis-accuracy}
-#| echo: false
 #| warning: false
+#| echo: false
 #| fig-width: 10
 #| fig-height: 6
-#| fig-cap: "Accuracy by Extractor Response for Diagnosis"
+#| fig-cap: "This plot shows the accuracy with 95% confidence intervals of human extractors compared to the ground truth, stratified by extracted diagnosis. Diagnoses with less than 20 extractions were grouped into 'Other'. Confidence intervals were calculated using cluster bootstraping resampling (1000 samples)."
 
-# Accuracy by Extractor Response
-plot_predictions(model_acc_diag, by = "value", type = "response", vcov = ~ier_bk) + 
+# --- Human Accuracy by Diagnosis with Bootstrap CIs ---
+diagnosis_data <- analysis_data_human |> 
+  filter(task == "Diagnosis") |> 
+  mutate(value = fct_lump_min(value, min = 20))
+
+boot_samples <- group_bootstraps(diagnosis_data, group = ier_bk, times = boot_R)
+
+boot_results <- map_dfr(boot_samples$splits, function(split) {
+  boot_data <- analysis(split)
+  mod <- glm(
+    correct ~ value,
+    data = boot_data,
+    family = binomial(link = "logit")
+  )
+  avg_predictions(mod, by = "value", vcov = FALSE)
+})
+
+# Calculate bootstrap confidence intervals
+diagnosis_boot_results <- boot_results |>
+  as_tibble() |>
+  group_by(value) |> 
+  summarise(
+    point.estimate = mean(estimate),
+    std.error = sd(estimate),
+    conf.low = quantile(estimate, 0.025),
+    conf.high = quantile(estimate, 0.975)
+  )
+
+diagnosis_boot_results |>
+  mutate(value = fct_reorder(value, point.estimate)) |>
+  ggplot(aes(x = value, y = point.estimate)) +
+  geom_pointrange(
+    aes(ymin = conf.low, ymax = conf.high),
+    size = 1,
+    fatten = 2
+  ) +
   coord_flip() +
-  scale_y_continuous(limits = c(0, 1))
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(
+    x = "",
+    y = "Accuracy"
+  )
 ```
 
-We need to examine what's going on with the 'No Malignant Disease', 'Kidney Tumor', and 'Gastric Cancer'.
+{{< pagebreak >}}
 
-### Task: Response to Treatment
-
-#### Accuracy
-
-Model used for non PET-CT scans.
+## Supplementary Figure 5
 
 ```{r model-rtt-pet}
+#| echo: false
+#| output: false
+
+# --- Human Accuracy by Diagnosis with Bootstrap CIs ---
 model_rsp_trt <- glm(
     correct ~ value,
     data = analysis_data_human |> filter(task == "Response to Treatment", pet_ct == FALSE),
@@ -311,30 +225,63 @@ model_rsp_trt <- glm(
 summary(model_rsp_trt)
 ```
 
-```{r accuracy-human-responsetotreatment-non-pet}
-#| echo: false
-#| output: false
-
-# Overall Accuracy
-avg_predictions(model_rsp_trt, vcov = ~ier_bk)
-
-# Accuracy by Extractor Response
-avg_predictions(model_rsp_trt, by = "value", vcov = ~ier_bk)
-```
-
-```{r fig-accuracy-human-responsetotreatment-non-pet}
+```{r fig-accuracy-human-responsetotreatment-nonpet}
 #| echo: false
 #| warning: false
 #| fig-width: 8
 #| fig-height: 6
-#| fig-cap: "Accuracy by Extractor Response for Response to Treatment (non-PET-CT scans)"
-plot_predictions(model_rsp_trt, by = "value", vcov = ~ier_bk) +
-  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.25))
+#| fig-cap: "This plot shows the accuracy with 95% confidence intervals of human extractors compared to the ground truth, stratified by extracted response for Response to Treatment (non-PET-CT scans). Confidence intervals were calculated using cluster bootstraping resampling (1000 samples)."
+
+# Bootstrap approach for Response to Treatment (non-PET-CT)
+rtt_data <- analysis_data_human |> 
+  filter(task == "Response to Treatment", pet_ct == FALSE)
+
+boot_samples_rtt <- group_bootstraps(rtt_data, group = ier_bk, times = 100)
+
+boot_results_rtt <- map_dfr(boot_samples_rtt$splits, function(split) {
+  boot_data <- analysis(split)
+  mod <- glm(
+    correct ~ value,
+    data = boot_data,
+    family = binomial(link = "logit")
+  )
+  avg_predictions(mod, by = "value", vcov = FALSE)
+})
+
+# Calculate bootstrap confidence intervals
+rtt_boot_results <- boot_results_rtt |>
+  as_tibble() |>
+  group_by(value) |> 
+  summarise(
+    point.estimate = mean(estimate),
+    std.error = sd(estimate),
+    conf.low = quantile(estimate, 0.025),
+    conf.high = quantile(estimate, 0.975)
+  )
+
+# Plot
+rtt_boot_results |>
+  mutate(value = fct_reorder(value, point.estimate)) |>
+  ggplot(aes(x = value, y = point.estimate)) +
+  geom_pointrange(
+    aes(ymin = conf.low, ymax = conf.high),
+    size = 1,
+    fatten = 2
+  ) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.25)) +
+  labs(
+    x = "",
+    y = "Accuracy"
+  )
 ```
 
-Model used for PET-CT scans
+{{< pagebreak >}}
+
+## Supplementary Figure 6
 
 ```{r model-rtt-nonpet}
+#| echo: false
+#| output: false
 model_rsp_trt_pet <- glm(
     correct ~ value,
     data = analysis_data_human |> filter(task == "Response to Treatment", pet_ct == T),
@@ -344,273 +291,99 @@ model_rsp_trt_pet <- glm(
 summary(model_rsp_trt_pet)
 ```
 
-```{r accuracy-human-responsetotreatment-pet}
-#| echo: false
-#| output: false
-avg_predictions(model_rsp_trt_pet, vcov = ~ier_bk)
-avg_predictions(model_rsp_trt_pet, by = "value", vcov = ~ier_bk)
-```
-
-CI go above 1, which shouldn't happen. Maybe because of delta method used by `marginaleffects`? Stable Disease seems to have been impossible to extract correctly for PET-CT scans (?)
-
 ```{r fig-accuracy-human-responsetotreatment-pet}
 #| echo: false
 #| warning: false
 #| fig-width: 8
 #| fig-height: 6
-#| fig-cap: "Accuracy by Extractor Response for Response to Treatment (PET-CT scans)"
-# CI above 0, because of delta method? 
-plot_predictions(model_rsp_trt_pet, by = "value", vcov = ~ier_bk) +
-    scale_y_continuous(limits = c(-0.2, 1.1), breaks = seq(0, 1, by = 0.25))
-```
+#| fig-cap: "This plot shows the accuracy with 95% confidence intervals of human extractors compared to the ground truth, stratified by extracted response for Response to Treatment (PET-CT scans). Confidence intervals were calculated using cluster bootstraping resampling (1000 samples)."
+# Bootstrap approach for Response to Treatment (PET-CT)
 
-#### PPV / NPV
+rtt_pet_data <- analysis_data_human |> 
+  filter(task == "Response to Treatment", pet_ct == TRUE)
 
-Confusion Matrix for Progression vs. Other
+boot_samples_rtt_pet <- group_bootstraps(rtt_pet_data, group = ier_bk, times = boot_R)
 
-```{r confusion-matrix-prog-human}
-#| echo: false
-progression_datat <- analysis_data_human |> 
-  filter(task == "Response to Treatment") |> 
-  mutate(
-    truth = if_else(truth == "Progression", "Progression", "Other"),
-    value = if_else(value == "Progression", "Progression", "Other")
-  )
-
-table(
-  `Extracted` = progression_datat$value,
-  `Truth` = progression_datat$truth
-)
-```
-
-If someone extracts progression, how often is it really progression?
-
-```{r}
-model_progr_ppv <- glm(
-    truth ~ 1,
-    data = analysis_data_human |> filter(task == "Response to Treatment", value == "Progression") |> 
-      mutate(truth = if_else(truth == "Progression", 1, 0)),
+boot_results_rtt_pet <- map_dfr(boot_samples_rtt_pet$splits, function(split) {
+  boot_data <- analysis(split)
+  mod <- glm(
+    correct ~ value,
+    data = boot_data,
     family = binomial(link = "logit")
   )
+  avg_predictions(mod, by = "value", vcov = FALSE)
+})
 
-summary(model_progr_ppv)
-
-# If someone extracts progression, how often is it really progression?
-avg_predictions(model_progr_ppv, type = "response", vcov = ~ier_bk)
-```
-
-If someone extracts stable disease or remission, how often is it NOT progression?
-
-```{r}
-model_progr_npv <- glm(
-    truth ~ 1,
-    data = analysis_data_human |> filter(task == "Response to Treatment", value != "Progression") |> 
-      mutate(truth = if_else(truth != "Progression", 1, 0)),
-    family = binomial(link = "logit")
+# Calculate bootstrap confidence intervals
+rtt_pet_boot_results <- boot_results_rtt_pet |>
+  as_tibble() |>
+  group_by(value) |> 
+  summarise(
+    point.estimate = mean(estimate),
+    std.error = sd(estimate),
+    conf.low = quantile(estimate, 0.025),
+    conf.high = quantile(estimate, 0.975)
   )
 
-summary(model_progr_npv)
-
-# If some extracts something else than progression, how often is it really not progression?
-avg_predictions(model_progr_npv, type = "response", vcov = ~ier_bk)
-```
-
-### Task: Metastasis
-
-#### Sensitivy and Specificty
-
-Confusion Matrix for Metastasis Yes/No.
-
-```{r confusion-meta-human}
-#| echo: false
-
-# Filter for the metastasis task
-metastasis_data <- analysis_data_human |>
-  filter(task == "Metastasis")
-
-# Generate and print the confusion matrix
-table(
-  `Extracted` = metastasis_data$value,
-  `Truth` = metastasis_data$truth
-)
-```
-
-Model used for sensitivity and specificity analysis.
-
-```{r model_sens_spec_meta_human}
-model_meta_sens_spec <- glm(
-    correct ~ truth*pet_ct,
-    data = analysis_data_human |> filter(str_detect(item, "metastasis")) |> mutate(truth = if_else(truth == "Yes", "Sensitivity", "Specificity")),
-    family = binomial(link = "logit")
-  )
-summary(model_meta_sens_spec)
-```
-
-What's the sensitivity and specificity for metastasis detection?
-
-```{r sens_spec_meta_human}
-avg_predictions(model_meta_sens_spec, by = "truth", type = "response", vcov = ~ier_bk) 
-```
-
-Does this change for PET-CT vs non PET-CT scans?
-
-```{r fig-sens-spec-metasasis}
-#| echo: false
-#| warning: false
-#| fig-width: 8
-#| fig-height: 6
-#| fig-cap: "Sensitivity and Specificity for Metastasis Detection by PET-CT"
-
-
-# Does this change for PET-CT vs non PET-CT
-plot_predictions(model_meta_sens_spec, by = c("truth", "pet_ct"), type = "response", vcov = ~ier_bk) + 
-  scale_y_continuous(limits = c(0, 1)) +
+# Plot
+rtt_pet_boot_results |>
+  mutate(value = fct_reorder(value, point.estimate)) |>
+  ggplot(aes(x = value, y = point.estimate)) +
+  geom_pointrange(
+    aes(ymin = conf.low, ymax = conf.high),
+    size = 1,
+    fatten = 2
+  ) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.25)) +
   labs(
     x = "",
-    y = "Predicted Probability",
-    color = "PET-Scan"
-  ) +
-  theme(legend.position = "bottom")
-```
-
-#### PPV / NPV
-
-```{r model_ppv_npv_meta_human}
-model_ppv_npv_simple <- glm(
-    truth ~ value,
-    data = analysis_data_human |> filter(task == "Metastasis") |> mutate(truth = if_else(truth == "Yes", 1, 0)),
-    family = binomial(link = "logit")
+    y = "Accuracy"
   )
-
-summary(model_ppv_npv_simple)
-```
-
-If a humans extracts "Yes" or "No" respectively, what is the probability that it is really a metastasis?
-
-```{r}
-avg_predictions(model_ppv_npv_simple, by = "value", type = "response", vcov = ~ier_bk)
-```
-
-```{r fig-pred-metasasis-human}
-#| echo: false
-#| fig-width: 8
-#| fig-height: 6
-#| fig-cap: "Predictive Value for Metastasis Detection"
-plot_predictions(model_ppv_npv_simple, by = "value", type = "response", vcov = ~ier_bk) + 
-  scale_y_continuous(limits = c(0, 1)) +
-  labs(
-    title = "",
-    x = "Extractor Response",
-    y = "Predicted Probability of a Metastasis"
-  )
-```
-
-```{r}
-#| echo: false
-#| output: false
-
-# Split into two different models that yield the same results
-model_ppv_simple <- glm(
-    truth ~ 1,
-    data = analysis_data_human |> filter(str_detect(item, "metastasis"), value == "Yes") |> mutate(truth = if_else(truth == "Yes", 1, 0)),
-    family = binomial(link = "logit")
-  )
-
-model_npv_simple <- glm(
-    truth ~ 1,
-    data = analysis_data_human |> filter(str_detect(item, "metastasis"), value == "No") |> mutate(truth = if_else(truth == "Yes", 1, 0)),
-    family = binomial(link = "logit")
-  )
-
-avg_predictions(model_ppv_simple, by = "value", type = "response", vcov = ~ier_bk)
-avg_predictions(model_npv_simple, type = "response", vcov = ~ier_bk, transform = function(x) 1 - x)
-```
-
-### Comparing Oncology-MDs vs Non-Oncology-MDs and Students
-
-Model used. 
-
-```{r}
-# accuracy
-model_md_stud <- glm(
-    correct ~ human_group * (task + pet_ct + report_length),
-    data = analysis_data_human,
-    family = binomial(link = "logit")
-  )
-summary(model_md_stud)
-```
-
-Does the overall accuracy of oncologists vs non-oncologists differ?
-
-```{r}
-#| echo: false
-avg_predictions(model_md_stud, by = "human_group", variable = "human_group", type = "response", vcov = ~ier_bk)
-
-# test for difference (marginalize over pet_ct and report_length and task)
-avg_comparisons(model_md_stud, variable = "human_group", type = "response", vcov = ~ier_bk)
-```
-
-Does this vary by task?
-
-```{r fig-acc-by-task-grp-human}
-#| fig-width: 8
-#| fig-height: 6
-#| fig-cap: "Accuracy by Task and Human Group"
-#| echo: false
-plot_predictions(model_md_stud, by = c("task", "human_group"), variable = "human_group", type = "response", vcov = ~ier_bk)
 ```
 
 {{< pagebreak >}}
 
-## LLM vs. Human 
+## Supplementary Table 1
 
-### Secondary endpoints
-
-```{r model-predictions-comparisons-diagnosis-tumorfree-llm}
+```{r}
 #| echo: false
 #| output: false
-
-m_acc2 <- glm(
-    correct ~ grp * task,
-    data = analysis_sample  |> filter(task == "Diagnosis" | task == "Radiologically Tumor Free"),
-    family = binomial(link = "logit")
-  )
-
-avg_predictions(m_acc2, by = c("grp", "task"), type = "response", vcov = ~ier_bk)
-avg_comparisons(m_acc2, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
-```
-
-```{r model-predictions-comparisons-overall-acc-llm}
-#| echo: false
-#| output: false
-
 m_acc3 <- glm(
     correct ~ grp * task,
-    data = analysis_sample, 
+    data = data_test, 
     family = binomial(link = "logit") )
 
 avg_predictions(m_acc3,by = "grp", type = "response", vcov = ~ ier_bk)
 avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
 ```
 
-#### Table for predictions and comparisons
-
 ```{r tbl-acc-secondary-endpoints}
 #| echo: false
+#| tbl-cap: "Accuracy with 95% confidence intervals for diagnosis, radiological absence of tumor, and across all tasks, by human extractors and LLMs, along with comparisons to human performance."
 
 # --- Display order for groups and tasks --------------------------------------
 ord_grp  <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
               "mistral-small:24b","llama3.3:70b")
 ord_task <- c("Diagnosis","Radiologically Tumor Free","Overall")
 
+# -- Fit Model for Inference ---
+
+m_acc2 <- glm(
+    correct ~ grp * task,
+    data = data_test  |> filter(task == "Diagnosis" | task == "Radiologically Tumor Free"),
+    family = binomial(link = "logit")
+  )
+
+
 # --- Predicted accuracies by task × group-----------------
 pred_task <- avg_predictions(
   m_acc2, by = c("grp","task"), type = "response",
   vcov = ~ier_bk) |>
   data.frame() |>
-  transmute(
+  mutate(
     task, grp,
-    Accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high)
+    accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high),
+    .keep = "none"
   )
 # --- Predicted overall accuracies by group ---------------------------------
 pred_overall <- avg_predictions(
@@ -618,9 +391,10 @@ pred_overall <- avg_predictions(
   vcov = ~ier_bk) |>
   data.frame() |>
   mutate(task = "Overall") |>
-  transmute(
+  mutate(
     task, grp,
-    Accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high)
+    accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high),
+    .keep = "none"
   )
 
 pred_all <- bind_rows(pred_task, pred_overall)
@@ -634,10 +408,11 @@ comp_task <- avg_comparisons(
     grp = str_replace(contrast, "\\s*-\\s*human$", ""),
     noninferior = conf.low > -0.05
   ) |>
-  transmute(
+  mutate(
     task, grp,
-    `Model vs human` = sprintf("%+.1f pp (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
-    `NI (Δ > -5pp)`  = if_else(noninferior, "yes", "no")
+    mod_vs_human = sprintf("%+.1f (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
+    p.value.noninf,
+    .keep = "none"
   )
 # --- Overall comparisons vs human -----------------------------------------
 comp_overall <- avg_comparisons(
@@ -649,10 +424,11 @@ comp_overall <- avg_comparisons(
     grp = str_replace(contrast, "\\s*-\\s*human$", ""),
     noninferior = conf.low > -0.05
   ) |>
-  transmute(
+  mutate(
     task, grp,
-    `Model vs human` = sprintf("%+.1f pp (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
-    `NI (Δ > -5pp)`  = if_else(noninferior, "yes", "no")
+    mod_vs_human= sprintf("%+.1f (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
+    p.value.noninf,
+    .keep = "none"
   )
 
 comp_all <- bind_rows(comp_task, comp_overall)
@@ -666,42 +442,204 @@ tab_all <- pred_all |>
   ) |>
   arrange(task, grp) |>
   mutate(
-    `Model vs human` = if_else(grp == "human", "", `Model vs human`),
-    `NI (Δ > -5pp)`  = if_else(grp == "human", "", `NI (Δ > -5pp)`)
+    mod_vs_human = if_else(grp == "human", "", mod_vs_human),
   ) |>
-  select(task, grp, Accuracy, `Model vs human`, `NI (Δ > -5pp)`)
+  select(task, grp, accuracy, mod_vs_human,p.value.noninf)
 
 # --- Build gt table --------------------------------------------------------
 pred_tbl_2 <- gt(tab_all, groupname_col = "task") |>
   cols_label(
-    task = "Task", grp = "Group",
-    Accuracy = "Accuracy (95% CI)",
-    `Model vs human` = "Difference vs human (pp)",
-    `NI (Δ > -5pp)`  = "Non-inferior?"
+    task = "Task", 
+    grp = "",
+    accuracy = "Accuracy (95% CI)",
+    mod_vs_human = "Difference (95% CI)",
+    p.value.noninf  = "P-value NI"
+  ) |>
+  fmt(
+    columns = p.value.noninf,
+    fns = function(x) {
+      ifelse(is.na(x), "—", 
+             ifelse(x < 0.001, "<0.001", 
+                    sprintf("%.3f", x)))
+    }
   ) |>
   tab_options(data_row.padding = px(4))
+
+pred_tbl_2
 
 # --- Export table -----------------------------------------------------------
 gt::gtsave(
   pred_tbl_2,
-  filename = "Accuracy_table_secondary.docx",
-  path = here::here("output", "oncology", "suppfigures")
+  filename = "supp-table-1-secondary-outcomes.docx",
+  path = here::here("output", "oncology", "tables")
 )
 ```
 
 {{< pagebreak >}}
 
-## Diagnostic performance and predictive values as exploratory metrics
+## Supplementary Figure 7
 
-### Task: Metastasis
+```{r confusion-meta-llm}
+#| echo: false
+#| output: false
+col_pred  <- "value"   
+col_truth <- "truth"   
 
-#### Table sens/spez/ppv/npv (human and LLMs)
+meta <- data_test |>
+  filter(task == "Metastasis") |>
+  mutate(
+    .pred  = factor(.data[[col_pred]],  levels = c("No","Yes")),
+    .truth = factor(.data[[col_truth]], levels = c("No","Yes"))
+  )
+
+# confusion matrices per model (grp)
+cms <- lapply(split(meta, meta$grp), function(d) {
+  with(d, table(Extracted = .pred, Truth = .truth))
+})
+for (m in names(cms)) {
+  cat("\n###", m, "\n")
+  print(cms[[m]])
+}
+```
+
+```{r fig-conf-matrices-per-model-meta-llm}
+#| fig-width: 8
+#| fig-height: 6
+#| echo: false
+#| fig-cap: "Confusion matrices for humans and LLMs for metastasis classification. As humans extracted in duplicate, the confusion matrix for humans is based on both extractions."
+
+
+# ensure consistent factor levels
+meta_plot <- meta |>
+  mutate(
+    .pred  = factor(.pred,  levels = c("No","Yes")),
+    .truth = factor(.truth, levels = c("No","Yes"))
+  )
+
+# tidy confusion matrices (facet-wide %)
+cm_tidy <- meta_plot |>
+  count(grp, .truth, .pred, name = "n") |>
+  group_by(grp) |>
+  complete(.truth, .pred, fill = list(n = 0)) |>
+  mutate(
+    total = sum(n),
+    pct   = n / total,
+    cell  = dplyr::case_when(
+      .pred == "No"  & .truth == "No"  ~ "TN",
+      .pred == "Yes" & .truth == "No"  ~ "FP",
+      .pred == "No"  & .truth == "Yes" ~ "FN",
+      .pred == "Yes" & .truth == "Yes" ~ "TP",
+      TRUE ~ NA_character_
+    )
+  ) |>
+  ungroup()
+
+# plot colored by percentage, with the original palette
+p_cm <- ggplot(cm_tidy, aes(x = .pred, y = .truth, fill = pct)) +
+  geom_tile(color = "grey90") +
+  geom_text(aes(label = sprintf("%d\n(%.1f%%)", n, 100 * pct)), lineheight = 0.9) +
+  scale_fill_gradient(
+    low = "#f0f4ff", high = "#2b59c3",
+    limits = c(0, 1), labels = scales::percent, name = "Percent"
+  ) +
+  facet_wrap(~ grp) +
+  coord_equal() +
+  labs(
+    x = "Predicted", y = "Truth"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid = element_blank(), strip.text = element_text(face = "bold"))
+
+print(p_cm)
+
+ggsave(
+  filename = here::here("output", "oncology", "suppfigures", "confusion_matrices_per_grp-meta.png"),
+  plot = p_cm, width = 8, height = 6, dpi = 300
+)
+```
+
+{{< pagebreak >}}
+
+## Supplementary Figure 8
+
+```{r}
+#| echo: false
+#| output: false
+prog <- data_test |>
+  filter(task == "Response to Treatment") |>
+  mutate(
+    Truth     = factor(if_else(truth == "Progression", "Progression", "Other"),
+                       levels = c("Other","Progression")),
+    Extracted = factor(if_else(value == "Progression", "Progression", "Other"),
+                       levels = c("Other","Progression"))
+  )
+
+cms <- lapply(split(prog, prog$grp), function(d) {
+  with(d, table(Extracted = Extracted, Truth = Truth))
+})
+
+for (m in intersect(ord_grp, names(cms))) {
+  cat("\n###", m, "\n")
+  print(cms[[m]])
+}
+```
+
+```{r fig-conf-matrices-per-model-prog-llm}
+#| fig-width: 8
+#| fig-height: 6
+#| echo: false
+#| fig-cap: "Confusion matrices for humans and LLMs for reponse to treatment classification, when response to treatment is dichotomized into progression vs other. As humans extracted in duplicate, the confusion matrix for humans is based on both extractions."
+
+
+prog <- prog |>
+    mutate(grp = factor(grp, levels = intersect(ord_grp, unique(grp)))) 
+  
+cm_prog <- prog |>
+  mutate(
+    Extracted = factor(Extracted, levels = c("Other", "Progression")),
+    Truth     = factor(Truth,     levels = c("Other", "Progression"))
+  ) |>
+  count(grp, Truth, Extracted, name = "n") |>
+  group_by(grp) |>
+  tidyr::complete(Truth, Extracted, fill = list(n = 0)) |>
+  mutate(total = sum(n), pct = n / total) |>
+  ungroup()
+
+p_cm_prog <- ggplot(cm_prog, aes(x = Extracted, y = Truth, fill = pct)) +
+  geom_tile(color = "grey90") +
+  geom_text(aes(label = sprintf("%d\n(%.1f%%)", n, 100 * pct)), lineheight = 0.9) +
+  scale_fill_gradient(
+    limits = c(0, 1),
+    low = "#f0f4ff", high = "#2b59c3", labels = percent, name = "Percent") +
+  facet_wrap(~ grp) +
+  coord_equal() +
+  labs(
+    title = "",
+    x = "Predicted (Extracted)",
+    y = "Truth"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid = element_blank(), strip.text = element_text(face = "bold"))
+
+print(p_cm_prog)
+
+ggsave(
+  filename = here::here("output", "oncology", "suppfigures", "confusion_matrices_response_to_treatment.png"),
+  plot = p_cm_prog, width = 8, height = 6, dpi = 300
+)
+
+```
+
+{{< pagebreak >}}
+
+## Supplementary Table 2
 
 ```{r tbl-ppv-npv-meta}
 #| echo: false
+#| tbl-cap: "Sensitivity, Specificity, PPV, and NPV for Metastasis Detection by Human Extractors and LLMs"
 
 # --- 1) Subset to Metastasis -------------------------------------------------
-dat_meta <- analysis_sample |>
+dat_meta <- data_test |>
   filter(task == "Metastasis") |>
   mutate(truth = if_else(truth == "Yes", "Sensitivity", "Specificity"))
 
@@ -741,7 +679,7 @@ sensspec_wide <- sensspec_llm |>
   pivot_wider(names_from = truth, values_from = Estimate)
 
 # --- 3) Model for PPV/NPV -----------------------------------------------------
-dat_meta2 <- analysis_sample |>
+dat_meta2 <- data_test |>
   filter(task == "Metastasis") |>
   mutate(
     truth01 = if_else(truth == "Yes", 1, 0),
@@ -790,15 +728,14 @@ metrics_all <- sensspec_wide |>
 # Build gt table with centered metric columns and a clear title
 tbl_metrics <- gt(metrics_all) |>
   cols_label(
-    grp         = "Group",
+    grp         = "",
     Sensitivity = "Sensitivity (95% CI)",
     Specificity = "Specificity (95% CI)",
     PPV         = "PPV (95% CI)",
     NPV         = "NPV (95% CI)"
   ) |>
   cols_align(align = "center", columns = c(Sensitivity, Specificity, PPV, NPV)) |>
-  tab_options(data_row.padding = px(4)) |>
-  tab_header(title = md("**Metastasis: Sensitivity / Specificity / PPV / NPV**"))
+  tab_options(data_row.padding = px(4))
 
 # Preview
 tbl_metrics
@@ -807,99 +744,22 @@ tbl_metrics
 gt::gtsave(
   tbl_metrics,
   filename = "Metastasis_metrics_SensSpec_PPVNPV.docx",
-  path = here::here("output", "oncology", "suppfigures")
+  path = here::here("output", "oncology", "tables")
 )
 ```
 
-#### Confusion matrix (human and LLMs (n=300 reports))
+{{< pagebreak >}}
 
-```{r confusion-meta-llm}
-col_pred  <- "value"   
-col_truth <- "truth"   
-
-meta <- analysis_sample |>
-  filter(task == "Metastasis") |>
-  mutate(
-    .pred  = factor(.data[[col_pred]],  levels = c("No","Yes")),
-    .truth = factor(.data[[col_truth]], levels = c("No","Yes"))
-  )
-
-# confusion matrices per model (grp)
-cms <- lapply(split(meta, meta$grp), function(d) {
-  with(d, table(Extracted = .pred, Truth = .truth))
-})
-for (m in names(cms)) {
-  cat("\n###", m, "\n")
-  print(cms[[m]])
-}
-```
-```{r fig-conf-matrices-per-model-meta-llm}
-#| fig-width: 8
-#| fig-height: 6
-#| fig-cap: "Confusion matrices per model (grp) task: metastasis"
-#| echo: false
-
-# ensure consistent factor levels
-meta_plot <- meta |>
-  mutate(
-    .pred  = factor(.pred,  levels = c("No","Yes")),
-    .truth = factor(.truth, levels = c("No","Yes"))
-  )
-
-# tidy confusion matrices (facet-wide %)
-cm_tidy <- meta_plot |>
-  count(grp, .truth, .pred, name = "n") |>
-  group_by(grp) |>
-  complete(.truth, .pred, fill = list(n = 0)) |>
-  mutate(
-    total = sum(n),
-    pct   = n / total,
-    cell  = dplyr::case_when(
-      .pred == "No"  & .truth == "No"  ~ "TN",
-      .pred == "Yes" & .truth == "No"  ~ "FP",
-      .pred == "No"  & .truth == "Yes" ~ "FN",
-      .pred == "Yes" & .truth == "Yes" ~ "TP",
-      TRUE ~ NA_character_
-    )
-  ) |>
-  ungroup()
-
-# plot colored by percentage, with the original palette
-p_cm <- ggplot(cm_tidy, aes(x = .pred, y = .truth, fill = pct)) +
-  geom_tile(color = "grey90") +
-  geom_text(aes(label = sprintf("%d\n(%.1f%%)", n, 100 * pct)), lineheight = 0.9) +
-  scale_fill_gradient(
-    low = "#f0f4ff", high = "#2b59c3",
-    limits = c(0, 1), labels = scales::percent, name = "Percent"
-  ) +
-  facet_wrap(~ grp) +
-  coord_equal() +
-  labs(
-    title = "Confusion matrices per model (grp) - Metastasis",
-    x = "Predicted", y = "Truth"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(panel.grid = element_blank(), strip.text = element_text(face = "bold"))
-
-print(p_cm)
-
-ggsave(
-  filename = here::here("output", "oncology", "suppfigures", "confusion_matrices_per_grp-meta.png"),
-  plot = p_cm, width = 8, height = 6, dpi = 300
-)
-```
-
-### Task: Progression vs Other.
-
-#### Table sens/spez/ppv/npv (human and LLMs)
+## Supplementary Table 3
 
 ```{r tbl-ppv-npv-rtt}
 #| echo: false
+#| tbl-cap: "Sensitivity, Specificity, PPV, and NPV for response to treatment, when dichotomized into progression vs other, by human and LLMs."
 # --------------------------
 # A) Sensitivity / Specificity (bootstrapped) for Response to Treatment
 # --------------------------
 # Data
-dat_prog <- analysis_sample |>
+dat_prog <- data_test |>
   filter(task == "Response to Treatment") |>
   mutate(
     truth = if_else(truth == "Progression", "Sensitivity", "Specificity"),
@@ -915,14 +775,28 @@ model_prog_sens_spec <- glm(
 )
 
 # Bootstrapped predicted probabilities (95% CI)
-set.seed(42)
-sensspec_prog_boot <- marginaleffects::avg_predictions(
-  model_prog_sens_spec,
-  by   = c("truth","grp"),
-  type = "response"
-) |>
-  marginaleffects::inferences(method = "boot", R = 100) |>
+boot_samples_prog <- group_bootstraps(dat_prog, group = ier_bk, times = boot_R)
+
+boot_results_prog <- map_dfr(boot_samples_prog$splits, function(split) {
+  boot_data <- analysis(split)
+  mod <- glm(
+    correct ~ truth * grp,
+    data = boot_data,
+    family = binomial(link = "logit")
+  )
+  avg_predictions(mod, by = c("truth", "grp"), vcov = FALSE)
+})
+
+# Calculate bootstrap confidence intervals
+sensspec_prog_boot <- boot_results_prog |>
   as_tibble() |>
+  group_by(truth, grp) |> 
+  summarise(
+    estimate = mean(estimate),
+    conf.low = quantile(estimate, 0.025),
+    conf.high = quantile(estimate, 0.975),
+    .groups = "drop"
+  ) |>
   mutate(
     Estimate = sprintf("%.1f%% (%.1f–%.1f%%)",
                        100*estimate, 100*conf.low, 100*conf.high)
@@ -938,7 +812,7 @@ sensspec_prog_wide <- sensspec_prog_boot |>
 # B) PPV / NPV (bootstrapped) for Response to Treatment
 # --------------------------
 # Data for PPV/NPV model
-dat_prog_ppvnpv <- analysis_sample |>
+dat_prog_ppvnpv <- data_test |>
   filter(task == "Response to Treatment") |>
   mutate(
     truth01 = if_else(truth == "Progression", 1, 0),            # binary gold-standard
@@ -955,14 +829,28 @@ model_ppv_npv_prog <- glm(
 )
 
 # Bootstrapped predicted probabilities by value × grp (95% CI)
-set.seed(42)
-pred_val_grp_prog <- marginaleffects::avg_predictions(
-  model_ppv_npv_prog,
-  by = c("value","grp"),
-  type = "response"
-) |>
-  marginaleffects::inferences(method = "boot", R = 100) |>
-  as_tibble()
+boot_samples_prog_ppv <- group_bootstraps(dat_prog_ppvnpv, group = ier_bk, times = boot_R)
+
+boot_results_prog_ppv <- map_dfr(boot_samples_prog_ppv$splits, function(split) {
+  boot_data <- analysis(split)
+  mod <- glm(
+    truth01 ~ value * grp,
+    data = boot_data,
+    family = binomial(link = "logit")
+  )
+  avg_predictions(mod, by = c("value", "grp"), vcov = FALSE)
+})
+
+# Calculate bootstrap confidence intervals
+pred_val_grp_prog <- boot_results_prog_ppv |>
+  as_tibble() |>
+  group_by(value, grp) |> 
+  summarise(
+    estimate = mean(estimate),
+    conf.low = quantile(estimate, 0.025),
+    conf.high = quantile(estimate, 0.975),
+    .groups = "drop"
+  )
 
 # Map to PPV/NPV and format CI (NPV uses 1 - p and flipped bounds)
 ppv_npv_prog_wide <- pred_val_grp_prog |>
@@ -973,7 +861,7 @@ ppv_npv_prog_wide <- pred_val_grp_prog |>
     UCL      = if_else(Metric == "PPV", conf.high, 1 - conf.low),
     pretty   = sprintf("%.1f%% (%.1f–%.1f%%)", 100*Estimate, 100*LCL, 100*UCL)
   ) |>
-  transmute(grp, Metric, pretty) |>
+  select(grp, Metric, pretty) |>
   arrange(Metric, grp) |>
   pivot_wider(names_from = Metric, values_from = pretty) |>
   arrange(factor(grp, levels = ord_grp))
@@ -996,8 +884,7 @@ tbl_prog_metrics <- gt(metrics_prog) |>
     NPV         = "NPV (95% CI)"
   ) |>
   cols_align("center", c(Sensitivity, Specificity, PPV, NPV)) |>
-  tab_options(data_row.padding = px(4)) |>
-  tab_header(title = md("**Response to Treatment: Sensitivity / Specificity / PPV / NPV**"))
+  tab_options(data_row.padding = px(4))
 
 # Preview
 tbl_prog_metrics
@@ -1008,85 +895,17 @@ tbl_prog_metrics
 gt::gtsave(
   tbl_prog_metrics,
   filename = "RtT_metrics_SensSpec_PPVNPV.docx",
-  path = here::here("output", "oncology", "suppfigures")
+  path = here::here("output", "oncology", "tables")
 )
-```
-
-#### Confusion matrix (human and LLMs)
-
-```{r}
-prog <- analysis_sample |>
-  filter(task == "Response to Treatment") |>
-  mutate(
-    Truth     = factor(if_else(truth == "Progression", "Progression", "Other"),
-                       levels = c("Other","Progression")),
-    Extracted = factor(if_else(value == "Progression", "Progression", "Other"),
-                       levels = c("Other","Progression"))
-  )
-
-cms <- lapply(split(prog, prog$grp), function(d) {
-  with(d, table(Extracted = Extracted, Truth = Truth))
-})
-
-for (m in intersect(ord_grp, names(cms))) {
-  cat("\n###", m, "\n")
-  print(cms[[m]])
-}
-```
-
-```{r fig-conf-matrices-per-model-prog-llm}
-#| fig-width: 8
-#| fig-height: 6
-#| fig-cap: "Confusion matrices per model (grp), task: progression vs. other"
-#| echo: false
-
-prog <- prog |>
-    mutate(grp = factor(grp, levels = intersect(ord_grp, unique(grp)))) 
-  
-cm_prog <- prog |>
-  mutate(
-    Extracted = factor(Extracted, levels = c("Other", "Progression")),
-    Truth     = factor(Truth,     levels = c("Other", "Progression"))
-  ) |>
-  count(grp, Truth, Extracted, name = "n") |>
-  group_by(grp) |>
-  tidyr::complete(Truth, Extracted, fill = list(n = 0)) |>
-  mutate(total = sum(n), pct = n / total) |>
-  ungroup()
-
-p_cm_prog <- ggplot(cm_prog, aes(x = Extracted, y = Truth, fill = pct)) +
-  geom_tile(color = "grey90") +
-  geom_text(aes(label = sprintf("%d\n(%.1f%%)", n, 100 * pct)), lineheight = 0.9) +
-  scale_fill_gradient(low = "#f0f4ff", high = "#2b59c3", labels = percent, name = "Percent") +
-  facet_wrap(~ grp) +
-  coord_equal() +
-  labs(
-    title = "Confusion matrices per model (grp) — Response to Treatment",
-    x = "Predicted (Extracted)",
-    y = "Truth"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(panel.grid = element_blank(), strip.text = element_text(face = "bold"))
-
-print(p_cm_prog)
-
-ggsave(
-  filename = here::here("output", "oncology", "suppfigures", "confusion_matrices_response_to_treatment.png"),
-  plot = p_cm_prog, width = 8, height = 6, dpi = 300
-)
-
 ```
 
 {{< pagebreak >}}
 
-## Time per report
-
-### Human
-
-Time per report (human): 
+## Supplementary Table 4
 
 ```{r efficiency-human}
 #| echo: false
+#| output: false
 
 df <- logs$data
 
@@ -1129,15 +948,11 @@ time <- clean_extractions |>
     min_sec  = min(gap_imp,  na.rm = TRUE),
     max_sec  = max(gap_imp,  na.rm = TRUE)
   )
-time
 ```
-
-### LLM's
-
-Time per report by llm: 
 
 ```{r efficiency-llm}
 #| echo: false
+#| output: false
 
 llm_eff <- read_csv(here("data", "oncology", "model_iteration_durations.csv"))
 
@@ -1167,18 +982,78 @@ per_model <- bind_rows(
     mean_min = mean_sec / 60,
     .groups = "drop"
   )
-per_model
 ```
 
-## Export and explore mistakes
+```{r}
+#| echo: false
+#| tbl-cap: "Mean extraction time per report by extractor group."
+# Combine human and LLM timing data
+combined_timing <- bind_rows(
+  # Human timing with range
+  time |> 
+    mutate(
+      group = "human",
+      mean_min = mean_sec / 60,
+      min_min = min_sec / 60,
+      max_min = max_sec / 60
+    ) |> 
+    select(group, mean_sec, mean_min, min_sec, max_sec, min_min, max_min),
+  
+  # LLM timing - rename and add NA for min/max
+  per_model |> 
+    rename(group = model) |> 
+    mutate(
+      min_sec = NA_real_,
+      max_sec = NA_real_,
+      min_min = NA_real_,
+      max_min = NA_real_
+    ) |>
+    select(group, mean_sec, mean_min, min_sec, max_sec, min_min, max_min)
+) |>
+  # Shorten LLM names - keep only up to parameter count
+  mutate(
+    group = case_when(
+      group == "llama3.3:70b-instruct-q5_K_M" ~ "llama3.3:70b",
+      group == "mistral-small:24b-instruct-2501-q4_K_M" ~ "mistral-small:24b",
+      TRUE ~ group
+    ),
+    group = factor(group, levels = c(
+      "human", 
+      "llama3.3:70b",
+      "mistral-small:24b", 
+      "qwen3:32b",
+      "qwq:32b",
+      "gpt-oss:120b"
+    ))
+  ) |>
+  arrange(group)
 
-### gpt:oss mistakes in analysis_sample(n = 300) 
+# Create gt table with range for humans
+tbl_timing <- combined_timing |>
+  mutate(
+    time_display = if_else(
+      group == "human",
+      sprintf("%.1f (%.1f–%.1f)", mean_min, min_min, max_min),
+      sprintf("%.1f", mean_min)
+    )
+  ) |>
+  select(group, time_display) |>
+  gt() |>
+  cols_label(
+    group = "",
+    time_display = "Mean Time per Report (minutes)"
+  ) |>
+  cols_align(align = "center", columns = time_display) |> 
+  tab_options(data_row.padding = px(4))
+
+tbl_timing
+```
 
 ```{r mistakes-gptoss}
 #| echo: false
 #| output: false
 
-gpt_oss_mistakes <- analysis_sample |>
+gpt_oss_mistakes <- data_test |>
   filter(human == 0, grp == "gpt-oss:120b", correct == 0) |>
   select(-human, -extractor_id, -training, -item, -report_length, -model) |>
   rename(model = grp)
@@ -1199,12 +1074,9 @@ writexl::write_xlsx(
 )
 ```
 
-### Explore mistakes
-
-What mistakes did gptoss make in response to treatment task?
-
 ```{r explore-mistakes-gptoss}
 #| echo: false
+#| output: false
 
 rt_mistakes <- gpt_oss_mistakes %>%
   filter(task == "Response to Treatment")
@@ -1215,12 +1087,6 @@ wrong_pred_counts <- rt_mistakes %>%
   mutate(prop = n / sum(n))
 
 wrong_pred_counts
-```
-
-What combinations of errors did gptoss make in response to treatment task?
-
-```{r explore-mistakes-gptoss}
-#| echo: false
 
 error_combos <- rt_mistakes %>%
   count(truth, value, name = "n") %>%
@@ -1228,13 +1094,12 @@ error_combos <- rt_mistakes %>%
 
 error_combos
 ```
-### All LLM mistakes in prompt-optimization set
 
 ```{r mistakes-llm-optim-set}
 #| echo: false
 #| output: false
 
-llm_mistakes <- optim_sample |> 
+llm_mistakes <- data_test |> 
   filter(human == 0) |> 
   filter(correct == 0) |> 
   select(-human, -extractor_id, -training, -item, -report_length, -model) |> 
@@ -1258,15 +1123,15 @@ writexl::write_xlsx(
 # exploring some reasons for llm mistakes
 mistakes <- glm(
     correct ~ body_region,
-    data = optim_sample |> filter(human == 0),
+    data = data_test |> filter(human == 0),
     family = binomial(link = "logit")
   )
 summary(mistakes)
 marginaleffects::avg_predictions(mistakes, by = "body_region", type = "response", vcov = ~ier_bk)
 
 mistakes <- glm(
-    correct ~ report_length,
-    data = optim_sample |> filter(human == 0),
+    correct ~ splines::ns(report_length, df = 4),
+    data = data_test |> filter(human == 0),
     family = binomial(link = "logit")
   )
 plot_predictions(mistakes, by = "report_length", type = "response", vcov = ~ier_bk)

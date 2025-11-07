@@ -97,6 +97,7 @@ diag_top4_other
 ```
 
 Of the 400 reports, how many at least one metastasis?
+
 ```{r any-metastasis}
 #| echo: false
 #| output: false
@@ -185,8 +186,6 @@ tbl_mets_top4 <- data |>
 
 tbl_mets_top4
 ```
-
-
 
 ```{r tbl-response-to-treatment}
 #| echo: false
@@ -374,7 +373,7 @@ comp <- avg_comparisons(
   mutate(
     task, 
     grp,
-    mod_vs_human = sprintf("%+.1f pp (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
+    mod_vs_human = sprintf("%+.1f (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
     p.value.noninf,
     .keep = "none"
   )
@@ -394,7 +393,7 @@ pred_tbl <- gt(tab, groupname_col = "task") |>
     task = "Task",
     grp  = "",
     Accuracy = "Accuracy (95% CI)",
-    mod_vs_human = "Difference (pp)",
+    mod_vs_human = "Difference (95% CI)",
     p.value.noninf  = "P-value NI"
   ) |>
   fmt(
@@ -1044,6 +1043,3 @@ ggsave(
   width = 8, height = 12, dpi = 300
 )
 ```
-
-
-
