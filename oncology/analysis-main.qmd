@@ -362,7 +362,7 @@ pred <- avg_predictions(
 # Group vs. human comparisons within each task 
 comp <- avg_comparisons(
   m_acc, variable = "grp", by = "task", type = "response",
-  vcov = ~ ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.95
+  vcov = ~ ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.90
 ) |>
   data.frame() |>
   mutate(
@@ -1034,7 +1034,8 @@ plot_comparisons(
     coord_flip() +
     theme(
       legend.position = "bottom"
-    )
+    ) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = "grey50")
 
 ggsave(
   filename = here::here("output", "oncology", "figures", "llm_prompt_refinement_improvement.png"),

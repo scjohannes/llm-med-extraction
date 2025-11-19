@@ -71,7 +71,7 @@ logs <- redcap_log_read(
 ## Format Data for Analysis
 
 ```{r format-data}
-#| echo: false
+#| echo: true
 #| output: false
 long_data <- data |>
   group_by(redcap_event_name) |>

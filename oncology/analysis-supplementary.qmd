@@ -28,7 +28,7 @@ library(writexl)
 ```{r}
 #| echo: false
 #| output: false
-boot_R <- 100
+boot_R <- 1000
 ```
 
 ```{r}
@@ -146,44 +146,34 @@ plot_predictions(model_acc, by = c("task", "pet_ct"), type = "response", vcov = 
 
 ## Supplementary Figure 4
 
-```{r model}
-#| echo: false
-#| ouput: false
-model_acc_diag <- glm(
-    correct ~ value,
-    data = analysis_data_human |> filter(task == "Diagnosis") |> mutate(value = fct_lump_min(value, min = 10)),
-    family = binomial(link = "logit")
-  )
-```
-
 ```{r fig-diagnosis-accuracy}
 #| warning: false
 #| echo: false
 #| fig-width: 10
 #| fig-height: 6
-#| fig-cap: "This plot shows the accuracy with 95% confidence intervals of human extractors compared to the ground truth, stratified by extracted diagnosis. Diagnoses with less than 20 extractions were grouped into 'Other'. Confidence intervals were calculated using cluster bootstraping resampling (1000 samples)."
+#| fig-cap: "This plot shows the accuracy with 95% confidence intervals of human and LLMS extraction compared to the ground truth, stratified by diagnosis. Diagnoses with less than 20 extractions were grouped into 'Other'. Confidence intervals were calculated using cluster bootstraping resampling (1000 samples)."
 
 # --- Human Accuracy by Diagnosis with Bootstrap CIs ---
-diagnosis_data <- analysis_data_human |> 
+diagnosis_data <- data_test |> 
   filter(task == "Diagnosis") |> 
-  mutate(value = fct_lump_min(value, min = 20))
+  mutate(value = fct_lump_min(value, min = 50))
 
 boot_samples <- group_bootstraps(diagnosis_data, group = ier_bk, times = boot_R)
 
 boot_results <- map_dfr(boot_samples$splits, function(split) {
   boot_data <- analysis(split)
   mod <- glm(
-    correct ~ value,
+    correct ~ value * grp,
     data = boot_data,
     family = binomial(link = "logit")
   )
-  avg_predictions(mod, by = "value", vcov = FALSE)
-})
+  avg_predictions(mod, by = c("value", "grp"), vcov = FALSE)
+}, .progress = TRUE)
 
 # Calculate bootstrap confidence intervals
 diagnosis_boot_results <- boot_results |>
   as_tibble() |>
-  group_by(value) |> 
+  group_by(value, grp) |> 
   summarise(
     point.estimate = mean(estimate),
     std.error = sd(estimate),
@@ -191,20 +181,65 @@ diagnosis_boot_results <- boot_results |>
     conf.high = quantile(estimate, 0.975)
   )
 
+# consistent ordering
+ord <- c(
+  "human",
+  "gpt-oss:120b",
+  "qwen3:32b",
+  "qwq:32b",
+  "mistral-small:24b",
+  "llama3.3:70b")
+
+# palette (high contrast, colorblind-friendly-ish)
+pal_models <- c(
+  human               = "#000000",
+  "gpt-oss:120b"      = "#E69F00",
+  "qwen3:32b"         = "#56B4E9",
+  "qwq:32b"           = "#009E73",
+  "mistral-small:24b" = "#0072B2",
+  "llama3.3:70b"      = "#D55E00"
+)
+
+# ensure factor levels where needed
+data_test <- data_test |>
+  mutate(grp = factor(grp, levels = ord_grp))
+
+# example application to diagnosis plot
+dodge <- position_dodge(width = 0.5)
+
+human_order <- diagnosis_boot_results |>
+  filter(grp == "human") |>
+  arrange(point.estimate) |>
+  pull(value) |>
+  as.character()
+
+all_values <- diagnosis_boot_results |> distinct(value) |> pull(value) |> as.character()
+
 diagnosis_boot_results |>
-  mutate(value = fct_reorder(value, point.estimate)) |>
-  ggplot(aes(x = value, y = point.estimate)) +
+  mutate(
+    grp = factor(grp, levels = ord_grp),
+    value = factor(value, levels = c(human_order, setdiff(all_values, human_order)))
+  ) |>
+  filter(!(grp == "qwen3:32b" | grp == "qwq:32b")) |>
+  ggplot(aes(x = value, y = point.estimate, color = grp, group = grp)) +
   geom_pointrange(
     aes(ymin = conf.low, ymax = conf.high),
+    position = dodge,
     size = 1,
     fatten = 2
   ) +
   coord_flip() +
   scale_y_continuous(limits = c(0, 1)) +
-  labs(
-    x = "",
-    y = "Accuracy"
-  )
+  scale_color_manual(values = pal_models, breaks = ord_grp, name = "") +
+  labs(x = "", y = "Accuracy") +
+  theme(legend.position = "bottom")
+
+# save
+ggsave(
+  filename = here::here("output", "oncology", "suppfigures", "diagnosis_accuracy_all_models.svg"),
+  width = 10,
+  height = 6
+)
 ```
 
 {{< pagebreak >}}
@@ -477,7 +512,124 @@ gt::gtsave(
 
 {{< pagebreak >}}
 
-## Supplementary Figure 7
+## Supplementary Figure 7 {#sec-supp-fig-7}
+
+```{r fig-ppv-npv-meta}
+#| fig-width: 10
+#| fig-height: 6
+#| echo: false
+#| fig-cap: "Sensitivity, Specificity, PPV, and NPV for Metastasis Detection by Human Extractors and LLMs. Point estimates with 95% confidence intervals are shown."
+
+# --- 1) Subset to Metastasis -------------------------------------------------
+dat_meta <- data_test |>
+  filter(task == "Metastasis") |>
+  mutate(truth = if_else(truth == "Yes", "Sensitivity", "Specificity"))
+
+# Desired row order for models/groups
+ord_grp <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
+             "mistral-small:24b","llama3.3:70b")
+
+# Apply the ordering
+dat_meta <- dat_meta |>
+  mutate(grp = factor(grp, levels = ord_grp))
+
+# --- 2) Model for Sensitivity/Specificity ------------------------------------
+model_meta_sens_spec_llm <- glm(
+  correct ~ truth * grp,
+  data = dat_meta,
+  family = binomial(link = "logit")
+)
+
+# Predicted probabilities 
+sensspec_llm <- avg_predictions(
+  model_meta_sens_spec_llm,
+  by   = c("truth","grp"),
+  type = "response",
+  vcov = ~ ier_bk,
+  conf_level = 0.95
+) |>
+  data.frame() |>
+  select(truth, grp, estimate, conf.low, conf.high)
+
+# --- 3) Model for PPV/NPV -----------------------------------------------------
+dat_meta2 <- data_test |>
+  filter(task == "Metastasis") |>
+  mutate(
+    truth01 = if_else(truth == "Yes", 1, 0),
+    value   = factor(value, levels = c("No","Yes"))
+  )
+
+model_ppv_npv <- glm(
+  truth01 ~ value * grp,
+  data = dat_meta2,
+  family = binomial(link = "logit")
+)
+
+# Predicted probabilities 
+pred_val_grp <- marginaleffects::avg_predictions(
+  model_ppv_npv,
+  by = c("value","grp"),
+  type = "response",
+  vcov = ~ ier_bk,
+  conf_level = 0.95
+) |>
+  data.frame()
+
+ppv_npv <- pred_val_grp |>
+  mutate(
+    Metric   = if_else(value == "Yes", "PPV", "NPV"),
+    Estimate = if_else(Metric == "PPV", estimate, 1 - estimate),
+    LCL      = if_else(Metric == "PPV", conf.low, 1 - conf.high),
+    UCL      = if_else(Metric == "PPV", conf.high, 1 - conf.low)
+  ) |>
+  transmute(
+    grp, 
+    Metric,
+    estimate = Estimate,
+    conf.low = LCL,
+    conf.high = UCL
+  )
+
+# --- 4) Combine all metrics into long format ----------------------------------
+metrics_long <- bind_rows(
+  sensspec_llm |> rename(Metric = truth),
+  ppv_npv
+) |>
+  mutate(
+    grp = factor(grp, levels = ord_grp),
+    Metric = factor(Metric, levels = c("Sensitivity", "Specificity", "PPV", "NPV"))
+  )
+
+# --- 5) Create plot -----------------------------------------------------------
+# Color palette
+pal_models <- c(
+  human               = "#000000",
+  "gpt-oss:120b"      = "#E69F00",
+  "qwen3:32b"         = "#56B4E9",
+  "qwq:32b"           = "#009E73",
+  "mistral-small:24b" = "#0072B2",
+  "llama3.3:70b"      = "#D55E00"
+)
+
+dodge <- position_dodge(width = 0.6)
+
+metrics_long |>
+  ggplot(aes(x = Metric, y = estimate, color = grp, group = grp)) +
+  geom_pointrange(
+    aes(ymin = conf.low, ymax = conf.high),
+    position = dodge,
+    size = 1,
+    fatten = 2
+  ) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.25), labels = percent) +
+  scale_color_manual(values = pal_models, breaks = ord_grp, name = "") +
+  labs(x = "", y = "Value") +
+  theme(legend.position = "bottom")
+```
+
+{{< pagebreak >}}
+
+## Supplementary Figure 8
 
 ```{r confusion-meta-llm}
 #| echo: false
