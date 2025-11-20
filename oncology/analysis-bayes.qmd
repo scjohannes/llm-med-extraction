@@ -1,0 +1,554 @@
+---
+title: "LLM-Extraction Project"
+subtitle: "Bayesian Sensitivity Analysis"
+author: "Johannes Schwenke"
+crossref:
+  fig-title: "eFigure" 
+  fig-prefix: "eFigure"
+date: today
+execute: 
+  echo: false
+format: 
+  typst:
+    papersize: a4
+    margin:
+      x: 2cm
+      y: 2.5cm
+    toc: true
+    columns: 1
+    tbl-cap-location: bottom
+---
+
+```{r}
+#| output: false
+library(here)
+library(arrow)
+library(glue)
+library(scales)
+library(gt)
+library(tidyverse)
+library(marginaleffects)
+library(brms)
+library(ggdist)
+library(patchwork)
+```
+
+```{r theme-for-figs}
+#| output: false
+# Reusable theme for figs
+theme_medical <- function(base_size = 11, base_family = "sans") {
+  theme_minimal(base_size = base_size, base_family = base_family) +
+    theme(
+      panel.grid.major.x = element_line(),
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor   = element_blank(),
+      axis.title = element_text(face = "bold"),
+      axis.text  = element_text(color = "black"),
+      axis.line  = element_line(linewidth = 0.4),
+      axis.ticks = element_line(linewidth = 0.4),
+      legend.position = "bottom",
+      legend.direction = "horizontal",
+      plot.margin = margin(5.5, 7, 5.5, 5.5)
+    )
+}
+
+# -------- Palette & ordering (Okabe–Ito) ------------------------------------
+okabe_ito_named <- c(
+  human               = "#000000",
+  "gpt-oss:120b"      = "#E69F00",
+  "qwen3:32b"         = "#56B4E9",
+  "qwq:32b"           = "#009E73",
+  "mistral-small:24b" = "#0072B2",
+  "llama3.3:70b"      = "#D55E00"
+)
+
+ord_legend    <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b","mistral-small:24b","llama3.3:70b")
+model_levels  <- setdiff(ord_legend, "human")
+contrast_lvls <- paste0(model_levels, " - human")
+
+shared_color <- scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE, name = "")
+shared_fill  <- scale_fill_manual( values = okabe_ito_named, breaks = ord_legend, drop = FALSE, name = "", guide = "none")
+diff_color   <- scale_color_manual(values = setNames(okabe_ito_named[model_levels], contrast_lvls),
+                                   breaks = contrast_lvls, labels = model_levels, drop = FALSE)
+```
+
+```{r cache-setup}
+#| output: false
+repredict_cached_draws <- FALSE # set to TRUE to recompute avg_comparisons/avg_predictions
+cache_dir_data <- here("output","oncology","data")
+dir.create(cache_dir_data, recursive = TRUE, showWarnings = FALSE)
+
+cache_df <- function(name, compute) {
+  path <- file.path(cache_dir_data, paste0(name, ".parquet"))
+  if (!repredict_cached_draws && file.exists(path)) {
+    read_parquet(path)
+  } else {
+    df <- compute()
+    write_parquet(df, path)
+    df
+  }
+}
+```
+
+```{r load-data}
+#| output: false
+data <- read_parquet(here("data","oncology","analysis_data.parquet"))
+```
+```{r prepare-data}
+#| output: false
+full_sample <- data |> 
+  mutate(
+    human = if_else(!str_detect(redcap_event_name, "LLM"), 1, 0),
+    grp = case_when(
+      human == 1 ~ "human",
+      model == "llama3.3:70b-instruct-q5_K_M" | model == "llama3.3:70b" ~ "llama3.3:70b",
+      model == "mistral-small:24b-instruct-2501-q4_K_M" | model == "mistral-small:24b" ~ "mistral-small:24b",
+      model == "rndcalcle01.qwen3:32b" | model == "qwen3:32b" ~ "qwen3:32b",
+      model == "rndcalcle01.qwq:32b" | model == "qwq:32b" ~ "qwq:32b",
+      model == "gpt-oss:120b" ~ "gpt-oss:120b",
+    ),
+    grp = factor(grp, levels = c("human", "llama3.3:70b", "mistral-small:24b", "qwen3:32b", "qwq:32b",  "gpt-oss:120b")) )
+
+analysis_sample <- full_sample |> 
+  group_by(ier_bk) |> 
+  filter(any(training == "No")) |> 
+  ungroup()
+```
+
+
+
+```{r model-predictions-comparisons}
+##| output: false
+m_acc <- brm(
+    correct ~ grp * task + (grp | ier_bk),
+    data = analysis_sample,
+    family = bernoulli(link = "logit"),
+    cores = 4,
+    chains = 4,
+    iter = 2000,
+    seed = 120398,
+    backend = "cmdstanr",
+    file = here("oncology", "models", "brms_accuracy_primary_endpoints"),
+    file_refit = "on_change"
+  )
+```
+
+```{r}
+#| output: false
+m_acc
+```
+
+```{r}
+#| output: false
+plot(m_acc)
+```
+
+## eFigure 1. Difference & Accuracy: primary endpoints
+
+```{r fig-main-primary-endpoints}
+#| fig-width: 8
+#| fig-height: 11
+#| fig-cap: "Bayesian reanalysis of the accuracy for classification of metastasis and response to treatment. Top panels (A, B) show the posterior distributions of accuracy (probability of correct response) for humans and each LLM across the two primary tasks with 66% and 95% credible intervals. Bottom panels (C, D) show the posterior distributions of the contrasts (LLM minus human) and 90% credible intervals for each LLM compared to humans, with the non-inferiority margin indicated by the solid red line at -0.05."
+#| echo: false
+#| warning: false
+
+# -------- Data for difference panels ----------------------------------------
+dfm <- cache_df("avg_comp_metastasis", function() {
+  avg_comparisons(
+    m_acc,
+    newdata  = analysis_sample |> filter(task == "Metastasis"),
+    variable = "grp", by = "task", type = "response",
+    re_formula = NULL
+  ) |>  
+    posterior_draws() |> 
+    data.frame() |>
+    mutate(contrast = factor(contrast, levels = contrast_lvls))
+})
+
+dfrtt <- cache_df("avg_comp_response_to_treatment", function() {
+  avg_comparisons(
+    m_acc,
+    newdata  = analysis_sample |> filter(task == "Response to Treatment"),
+    variable = "grp", by = "task", type = "response",
+    re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |>
+    mutate(contrast = factor(contrast, levels = contrast_lvls))
+})
+
+# Shared y-limits for difference panels
+lims <- c(-0.25, 0)
+
+# -------- TOP: Accuracy (A, B) ----------------------------------------------
+# Enforce identical x order by factoring 'grp' in newdata
+# new_m   <- analysis_sample |> filter(task == "Metastasis") |> mutate(grp = factor(grp, levels = ord_legend))
+# new_rtt <- analysis_sample |> filter(task == "Response to Treatment") |> mutate(grp = factor(grp, levels = ord_legend))
+
+theme_top <- theme_medical() +
+  theme(
+    panel.grid.major.y = element_line(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+pred_data_m <- cache_df("avg_pred_metastasis", function() {
+  avg_predictions(
+    m_acc, 
+    newdata = analysis_sample |> filter(task == "Metastasis"), 
+    by = "grp", 
+    type = "response", 
+    re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |>
+    mutate(grp = factor(grp, levels = ord_legend))
+})
+
+pred_data_rtt <- cache_df("avg_pred_response_to_treatment", function() {
+  avg_predictions(
+    m_acc, 
+    newdata = analysis_sample |> filter(task == "Response to Treatment"), 
+    by = "grp", 
+    type = "response", 
+    re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |>
+    mutate(grp = factor(grp, levels = ord_legend))
+})
+
+# Build plots manually with position control
+pA <- ggplot(pred_data_m, aes(x = grp, y = draw, color = grp, fill = grp)) +
+  stat_halfeye(
+    width = 0.6,         # Width of the "slab"
+    .width = c(0.66, 0.95), # Width of credible intervals shown at bottom
+    alpha = 0.7,
+    point_size = 1.2 # Use Median and Quantile Intervals
+  ) +
+  shared_color + shared_fill +
+  scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, 0.1)) +
+  scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
+  labs(tag = "A)", x = NULL, y = "Probability of Correct Response", title = "Metastasis") +
+  theme_top
+
+pB <- ggplot(pred_data_rtt, aes(x = grp, y = draw, color = grp, fill = grp)) +
+  stat_halfeye(
+    width = 0.6,
+    .width = c(0.66, 0.95),
+    alpha = 0.7,
+    point_size = 1.2
+  ) +
+  shared_color + shared_fill +
+  scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, 0.1)) +
+  scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
+  labs(tag = "B)", x = NULL, y = NULL, title = "Response to Treatment") +
+  theme_top
+
+
+# -------- BOTTOM: Difference vs. human (C, D) --------------------------------
+theme_bottom <- theme_medical() +
+  theme(
+    # axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.major.x = element_line(colour = "grey85"),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank()
+  )
+
+pC <- ggplot(dfm, aes(x = draw, y = contrast)) +
+  stat_halfeye(
+    .width = 0.90,
+    alpha = 0.8,
+    slab_color = "white",
+    slab_linewidth = 0.5,
+    point_size = 1.2
+  ) +
+  geom_vline(xintercept = 0,     linetype = "dotted") +
+  geom_vline(xintercept = -0.05, linetype = "solid", color = "red") +
+  scale_x_continuous(limits = lims, expand = expansion(mult = 0.02)) +
+  labs(tag = "C)", title = "Metastasis", y = NULL, x = "estimate") +
+  theme_bottom +
+  theme(legend.position = "none")
+
+pD <- ggplot(dfrtt, aes(x = draw, y = contrast)) +
+  stat_halfeye(
+    .width = 0.90,
+    alpha = 0.8,
+    slab_color = "white",
+    slab_linewidth = 0.5,
+    point_size = 1.2
+  ) +
+  geom_vline(xintercept = 0,     linetype = "dotted") +
+  geom_vline(xintercept = -0.05, linetype = "solid", color = "red") +
+  scale_x_continuous(limits = lims, expand = expansion(mult = 0.02)) +
+  labs(tag = "D)", title = "Response to Treatment", y = NULL, x = "estimate") +
+  theme_bottom +
+  theme(legend.position = "none")
+
+# -------- Assemble & save ----------------------------------------------------
+
+top_row <- (pA + pB) + 
+  plot_layout(guides = "collect") +
+  # for some reasons this works
+   plot_annotation(theme = theme(legend.position = "bottom"))
+
+# Combine with bottom plots (no legend)
+full_fig_primary <- top_row / pC / pD +
+  plot_layout(heights = c(6, 3, 3))
+
+full_fig_primary
+
+ggsave(
+  filename = here::here("output", "oncology", "figures", "bayes_full_primary.png"),
+  plot = full_fig_primary, width = 8, height = 12, dpi = 300
+)
+ggsave(
+  filename = here::here("output", "oncology", "figures", "bayes_full_primary.svg"),
+  plot = full_fig_primary, width = 8, height = 12, dpi = 300
+)
+```
+
+{{< pagebreak >}}
+
+## eFigure 2. Difference plot: secondary endpoints
+
+```{r fig-diff-secondary-endpoints}
+#| echo: false
+#| warning: false
+#| fig-cap: "Bayesian reanalysis of contrasts (LLM minus human) for secondary endpoints (Diagnosis, Radiologically Tumor Free, Overall Accuracy); posterior distributions with 90% credible intervals shown."
+#| fig-height: 8
+#| fig-width: 10
+
+# A) Diagnosis
+df_diag <- cache_df("avg_comp_diagnosis", function() {
+  avg_comparisons(
+    m_acc,
+    newdata = analysis_sample |> filter(task == "Diagnosis"),
+    variable = "grp", by = "task", type = "response",
+    re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |> 
+    mutate(contrast = factor(contrast, levels = contrast_lvls))
+})
+
+# B) Radiologically Tumor Free
+df_rtf <- cache_df("avg_comp_tumor_free", function() {
+  avg_comparisons(
+    m_acc,
+    newdata = analysis_sample |> filter(task == "Radiologically Tumor Free"),
+    variable = "grp", by = "task", type = "response",
+    re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |> 
+    mutate(contrast = factor(contrast, levels = contrast_lvls))
+})
+
+# C) Overall Accuracy
+# Note: calculating marginal contrast across the whole analysis sample
+df_over <- cache_df("avg_comp_overall", function() {
+  avg_comparisons(
+    m_acc,
+    newdata = analysis_sample, # Uses full sample to average over all tasks
+    variable = "grp", type = "response",
+    re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |> 
+    mutate(contrast = factor(contrast, levels = contrast_lvls))
+})
+
+## 3) LIMITS --------------------------------------------------------------
+# Calculate common x-axis limits across all three posterior sets
+all_draws <- c(df_diag$draw, df_rtf$draw, df_over$draw)
+lims <- range(c(quantile(all_draws, probs = c(0.001, 0.999)), -0.05, 0.05))
+
+## 4) PLOTS ---------------------------------------------------------------
+
+# Plot 1: Diagnosis
+p_diag <- ggplot(df_diag, aes(x = draw, y = contrast)) +
+  stat_halfeye(
+    
+    .width = 0.90,
+    alpha = 0.8,
+    slab_color = "white",
+    slab_linewidth = 0.5,
+    point_size = 1.2
+  ) +
+  geom_vline(xintercept = 0,     linetype = "dotted") +
+  geom_vline(xintercept = -0.05, linetype = "solid", color = "red") +
+  scale_x_continuous(limits = lims, expand = expansion(mult = 0.02)) +
+  labs(title = "Diagnosis", y = NULL, x = NULL) +
+  theme_bottom
+
+# Plot 2: Radiologically Tumor Free
+p_tf <- ggplot(df_rtf, aes(x = draw, y = contrast)) +
+  stat_halfeye(
+    .width = 0.90,
+    alpha = 0.8,
+    slab_color = "white",
+    slab_linewidth = 0.5,
+    point_size = 1.2
+  ) +
+  geom_vline(xintercept = 0,     linetype = "dotted") +
+  geom_vline(xintercept = -0.05, linetype = "solid", color = "red") +
+  scale_x_continuous(limits = lims, expand = expansion(mult = 0.02)) +
+  labs(title = "Radiologically Tumor Free", y = NULL, x = NULL) +
+  theme_bottom
+
+# Plot 3: Overall
+p_over <- ggplot(df_over, aes(x = draw, y = contrast)) +
+  stat_halfeye(
+    .width = 0.90,
+    alpha = 0.8,
+    slab_color = "white",
+    slab_linewidth = 0.5,
+    point_size = 1.2
+  ) +
+  geom_vline(xintercept = 0,     linetype = "dotted") +
+  geom_vline(xintercept = -0.05, linetype = "solid", color = "red") +
+  scale_x_continuous(limits = lims, expand = expansion(mult = 0.02)) +
+  labs(title = "Overall accuracy", y = NULL, x = "estimate") +
+  theme_bottom
+
+## 5) PATCHWORK -----------------------------------------------------------
+
+combined_sec <- p_diag / p_tf / p_over + 
+  plot_annotation(tag_levels = "A")
+
+combined_sec   
+
+## 6) SAVE ----------------------------------------------------------------
+
+ggsave(
+  filename = here("output", "oncology", "figures", "bayes_secondary_contrast.png"),
+  plot = combined_sec,
+  width = 8, height = 10.5, dpi = 300
+)
+
+ggsave(
+  filename = here("output", "oncology", "figures", "bayes_secondary_contrast.svg"),
+  plot = combined_sec,
+  width = 8, height = 10.5, dpi = 300
+)
+```
+
+{{< pagebreak >}}
+
+## eFigure 3. Accuracy by Task and Group (Human vs LLM)
+
+```{r fig-acc-secondary-endpoints}
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "Bayesian reanalysis of accuracy (probability of correct response) for secondary endpoints (Diagnosis, Radiologically Tumor Free, Overall Accuracy); posterior distributions with 66% and 95% credible intervals shown."
+#| warning: false
+
+# A) Diagnosis
+pred_diag <- cache_df("avg_pred_diagnosis", function() {
+  avg_predictions(
+    m_acc,
+    newdata = analysis_sample |> filter(task == "Diagnosis"),
+    by = "grp", type = "response", re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |> 
+    mutate(grp = factor(grp, levels = ord_legend))
+})
+
+# B) Radiologically Tumor Free
+pred_rtf <- cache_df("avg_pred_tumor_free", function() {
+  avg_predictions(
+    m_acc,
+    newdata = analysis_sample |> filter(task == "Radiologically Tumor Free"),
+    by = "grp", type = "response", re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |> 
+    mutate(grp = factor(grp, levels = ord_legend))
+})
+
+# C) Overall (Marginalized over all tasks in analysis_sample)
+pred_over <- cache_df("avg_pred_overall", function() {
+  avg_predictions(
+    m_acc,
+    newdata = analysis_sample, 
+    by = "grp", type = "response", re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |> 
+    mutate(grp = factor(grp, levels = ord_legend))
+})
+
+## 3) PLOTS ---------------------------------------------------------------
+
+# --- PLOT 1: Diagnosis ---------------------------------------------------
+p1 <- ggplot(pred_diag, aes(x = grp, y = draw, color = grp, fill = grp)) +
+  stat_halfeye(
+    width = 0.6,
+    .width = c(0.66, 0.95),
+    alpha = 0.7,
+    
+    point_size = 1.2
+  ) +
+  shared_color + shared_fill +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
+  labs(title = "Diagnosis", y = "Probability of Correct Response", x = NULL) +
+  theme_top
+
+# --- PLOT 2: Radiologically Tumor Free -----------------------------------
+p2 <- ggplot(pred_rtf, aes(x = grp, y = draw, color = grp, fill = grp)) +
+  stat_halfeye(
+    width = 0.6,
+    .width = c(0.66, 0.95),
+    alpha = 0.7,
+    point_size = 1.2
+  ) +
+  shared_color + shared_fill +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
+  labs(title = "Radiologically Tumor Free", y = NULL, x = NULL) +
+  theme_top
+
+# --- PLOT 3: Overall -----------------------------------------------------
+p3 <- ggplot(pred_over, aes(x = grp, y = draw, color = grp, fill = grp)) +
+  stat_halfeye(
+    width = 0.6,
+    .width = c(0.66, 0.95),
+    alpha = 0.7,
+    point_size = 1.2
+  ) +
+  shared_color + shared_fill +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
+  labs(title = "Overall Accuracy", y = NULL, x = NULL) +
+  theme_top
+
+## 4) COMBINE -------------------------------------------------------------
+
+combined_Acc <- p1 + p2 + p3 + 
+  plot_annotation(tag_levels = "A") + 
+  plot_layout(guides = "collect") +
+  plot_annotation(theme = theme(legend.position = "bottom"))
+
+combined_Acc
+
+## 5) SAVE ----------------------------------------------------------------
+
+ggsave(
+  filename = here::here("output", "oncology", "figures", "bayes_secondary_accuracy.png"),
+  plot = combined_Acc,
+  width = 10, height = 6, dpi = 300
+)
+
+ggsave(
+  filename = here::here("output", "oncology", "figures", "bayes_secondary_accuracy.svg"),
+  plot = combined_Acc,
+  width = 10, height = 6, dpi = 300
+)
+```
