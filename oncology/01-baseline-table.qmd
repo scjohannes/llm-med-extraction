@@ -1,0 +1,37 @@
+---
+title: LLM-Extraction Project - Baseline Characteristics Table
+---
+
+## Load packages
+```{r}
+#| echo: false
+#| output: false
+library(tidyverse)
+library(REDCapR)
+library(tinytable)
+library(MedOnko)
+```
+
+## Load Data
+
+```{r}
+data <- redcap_read(
+    redcap_uri = Sys.getenv("redcap_fxdb_url"),
+    token = Sys.getenv("llm_radio_api"),
+    raw_or_label = "label"
+  )$data
+```
+
+## Use IDs to download baseline data
+
+```{r}
+data_ids <- data |> 
+  mutate(
+    # extract any number before the | character
+    pat_id = as.numeric(str_extract(ier_bk, "[0-9]+$"))
+  ) |> 
+    select(pat_id) |> 
+    distinct()
+
+MedOnko::get_birth(24986782)
+```
