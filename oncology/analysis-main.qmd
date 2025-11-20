@@ -27,7 +27,6 @@ library(gt)
 library(tidyverse)
 library(marginaleffects)
 library(patchwork)
-library(ggbreak)
 ```
 
 ```{r load-data}

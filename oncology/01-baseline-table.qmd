@@ -25,13 +25,23 @@ data <- redcap_read(
 ## Use IDs to download baseline data
 
 ```{r}
-data_ids <- data |> 
-  mutate(
-    # extract any number before the | character
-    pat_id = as.numeric(str_extract(ier_bk, "[0-9]+$"))
-  ) |> 
-    select(pat_id) |> 
-    distinct()
+imaging_data <- get_imaging_from_ier(data$ier_bk)
 
-MedOnko::get_birth(24986782)
+sex <- get_sex(imaging_data$PAT_BK)
+birth_date <- get_birth(imaging_data$PAT_BK)
+
+baseline_data <- imaging_data |> 
+  left_join(birth_date, by = "PAT_BK") |>
+  left_join(sex, by = "PAT_BK") |>
+  mutate(
+    age = as.numeric(difftime(IMAGING_DATE, PAT_BIRTH_DATE, units = "days"))/365.25
+  ) |> 
+  group_by(PAT_BK) |> 
+  arrange(age) |> 
+  slice_head(n = 1) |> 
+  ungroup() |>
+  select(age, sex = PAT_GENDER_ID) |> 
+  distinct()
+
+arrow::write_parquet(baseline_data, here::here("output", "oncology", "data", "baseline_data.parquet"))
 ```
