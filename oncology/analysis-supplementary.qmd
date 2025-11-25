@@ -1,6 +1,11 @@
 ---
-title: Supplementary Figures
+title: Supplementary Materials
+crossref:
+  fig-title: "eFigure" 
+  fig-prefix: "eFigure"
 date: today
+execute: 
+  echo: false
 format: 
   typst:
     papersize: a4
@@ -10,7 +15,23 @@ format:
     toc: true
     columns: 1
     tbl-cap-location: bottom
+    include-in-header:
+      text: |
+        // --- Global Body Text Settings ---
+        // Times New Roman, 10pt, Single Spaced (leading roughly 0.65em)
+        #set text(font: "Times New Roman", size: 10pt)
+        #set par(leading: 0.65em, justify: true) 
+
+        // --- Table & Figure Settings ---
+        // Tables: Arial, 9pt
+        #show table: set text(font: "Arial", size: 9pt)
+        
+        // Captions: Arial, 8pt, Single Spaced
+        #show figure.caption: set text(font: "Arial", size: 8pt)
+        #show figure.caption: set par(leading: 0.5em)
 ---
+
+{{< pagebreak >}}
 
 ```{r setup}
 #| echo: false
@@ -23,32 +44,78 @@ library(rsample)
 library(scales)
 library(gt)
 library(writexl)
+library(brms)
+library(patchwork)
+library(ggdist)
 ```
 
 ```{r}
 #| echo: false
 #| output: false
-boot_R <- 1000
+boot_R <- 500
+```
+
+```{r cache-setup}
+#| output: false
+repredict_cached_draws <- FALSE # set to TRUE to recompute avg_comparisons/avg_predictions
+cache_dir_data <- here("output","oncology","data")
+dir.create(cache_dir_data, recursive = TRUE, showWarnings = FALSE)
+
+cache_df <- function(name, compute) {
+  path <- file.path(cache_dir_data, paste0(name, ".parquet"))
+  if (!repredict_cached_draws && file.exists(path)) {
+    read_parquet(path)
+  } else {
+    df <- compute()
+    write_parquet(df, path)
+    df
+  }
+}
+```
+
+```{r theme-for-figs}
+#| output: false
+# Reusable theme for figs
+theme_medical <- function(base_size = 11, base_family = "sans") {
+  theme_minimal(base_size = base_size, base_family = base_family) +
+    theme(
+      panel.grid.major.x = element_line(),
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor   = element_blank(),
+      axis.title = element_text(face = "bold"),
+      axis.text  = element_text(color = "black"),
+      axis.line  = element_line(linewidth = 0.4),
+      axis.ticks = element_line(linewidth = 0.4),
+      legend.position = "bottom",
+      legend.direction = "horizontal",
+      plot.margin = margin(5.5, 7, 5.5, 5.5)
+    )
+}
+
+# -------- Palette & ordering (Okabe–Ito) ------------------------------------
+okabe_ito_named <- c(
+  human               = "#000000",
+  "gpt-oss:120b"      = "#E69F00",
+  "qwen3:32b"         = "#56B4E9",
+  "qwq:32b"           = "#009E73",
+  "mistral-small:24b" = "#0072B2",
+  "llama3.3:70b"      = "#D55E00"
+)
+
+ord_legend    <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b","mistral-small:24b","llama3.3:70b")
+model_levels  <- setdiff(ord_legend, "human")
+contrast_lvls <- paste0(model_levels, " - human")
+
+shared_color <- scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE, name = "")
+shared_fill  <- scale_fill_manual( values = okabe_ito_named, breaks = ord_legend, drop = FALSE, name = "", guide = "none")
+diff_color   <- scale_color_manual(values = setNames(okabe_ito_named[model_levels], contrast_lvls),
+                                   breaks = contrast_lvls, labels = model_levels, drop = FALSE)
 ```
 
 ```{r}
 #| echo: false
 #| output: false
 data <- read_parquet(here("data","oncology","analysis_data.parquet"))
-
-logs <- REDCapR::redcap_log_read(
-  redcap_uri = Sys.getenv("redcap_fxdb_url"),
-  token = Sys.getenv("llm_radio_api"),
-  log_begin_date = as.Date("2025-05-01"),
-  log_end_date = as.Date("2025-11-01"),
-  record = NULL,
-  user = NULL,
-  http_response_encoding = "UTF-8",
-  locale = readr::default_locale(),
-  verbose = TRUE,
-  config_options = NULL,
-  handle_httr = NULL
-)
 
 analysis_data_human <- data |> 
   filter(!str_detect(redcap_event_name, "LLM"))
@@ -89,68 +156,201 @@ data_test <- data |>
     grp = factor(grp, levels = c("human", "llama3.3:70b", "mistral-small:24b", "qwen3:32b", "qwq:32b",  "gpt-oss:120b")))
 ```
 
-{{< pagebreak >}}
+```{r model-predictions-comparisons}
+##| output: false
+m_acc <- brm(
+    correct ~ grp * task + (grp | ier_bk),
+    data = data_test,
+    family = bernoulli(link = "logit"),
+    cores = 4,
+    chains = 4,
+    iter = 2000,
+    seed = 120398,
+    backend = "cmdstanr",
+    file = here("oncology", "models", "brms_accuracy_primary_endpoints"),
+    file_refit = "on_change"
+  )
+```
 
-## Supplementary Figure 1
-
-![This figure shows the flow of data in our study. The unstructured radiology reports and metadata are pulled from the Clinical Datawarehouse (CDWH) using a database interface in R and uploaded to the study database hosted on a local REDCap instance. The imaging reports are processed by Large Language Models (LLMs) on a local GPU cluster. For communication between R and the LLMs we use the ellmer package. Abbreviations: CDWH, Clinical Datawarehouse; GPU, Graphics Processing Unit.](images/llm-figs-final-dataflow.png){#fig-data-flow width="13cm"}
-
-{{< pagebreak >}}
-
-## Supplementary Figure 2
-
-```{r model-accuracy-human-overall}
-#| echo: false
+```{r}
 #| output: false
-model_acc <- glm(
-    correct ~ task * pet_ct,
-    data = analysis_data_human,
+m_acc
+```
+
+```{r}
+#| output: false
+# plot(m_acc)
+```
+
+# eFigures
+
+## eFigure 1
+
+![This figure shows the flow of data in the study. The unstructured radiology reports and metadata are pulled from the Clinical Datawarehouse (CDWH) using a database interface in R and uploaded to the study database hosted on a local REDCap instance. The imaging reports are processed by Large Language Models (LLMs) on a local GPU cluster. For communication between R and the LLMs we use the ellmer package. Abbreviations: CDWH, Clinical Datawarehouse; GPU, Graphics Processing Unit.](images/llm-figs-final-dataflow.png){#fig-data-flow width="13cm"}
+
+{{< pagebreak >}}
+
+## eFigure 2
+
+![This figure shows the how prompts for classification of metastasis are adapted to the imaging report. Each report has an 'imaging type' identifier in their metadata. Based on this identifier, the report is automatically classified as pertaining to one of 19 body regions and the corresponding prompt is selected. The prompts used for metastasis classification are shown in \[PLACEHOLDER\].](images/llm-figs-final-meta.svg){#fig-prompt-meta style="color: white;" width="13cm"}
+
+{{< pagebreak >}}
+
+## eFigure 3
+
+![This figure shows the how prompts for classification of response to treatment are chained. (1) A prompt to check the imaging report for being relevant to response to treatment is used. (2) The reports classified as eligible (in-scope) are categorized into reports mentioning RANO or RECIST using regular expressions. The prompts for data extraction are selected according to whether the imaging report was a PET scan, based on the report metadata (3). The prompts used for data extraction (4-7) are shown in \[PLACEHOLDER\].](images/llm-figs-final-rtt.svg){#fig-prompt-rtt style="color: white;" width="13cm"}
+
+{{< pagebreak >}}
+
+## eFigure 4
+
+```{r prep-data-old}
+#| output: false
+dat_old <- readRDS(here("data", "oncology", "redcap-2025-10-09-labels.rds"))$data
+
+long_data <- dat_old |>
+  group_by(redcap_event_name) |>
+  pivot_longer(
+    cols = c(
+      primary_tumor,
+      bone_metastasis,
+      cns_metastasis,
+      meningeal_metastasis,
+      lung_metastasis,
+      pleural_metastasis,
+      adrenal_metastasis,
+      kidney_metastasis,
+      liver_metastasis,
+      spleen_metastasis,
+      pancreas_metastasis,
+      ovarian_metastasis,
+      peritoneal_metastasis,
+      lymph_node_metastasis,
+      soft_tissue_metastasis,
+      other_organ_metastasis,
+      no_tumor,
+      response_to_trt, 
+      response_to_trt_pet
+    ),
+    names_to = "item",
+    values_to = "value"
+  ) |> 
+  select(-c(oncology_radiology_extraction_complete, justification, prompt, sample_complete)) |> 
+  ungroup()
+
+ground_truth_long <- readRDS(here("data", "oncology", "ground_truth_long.rds"))
+
+analysis_data <- long_data |>
+    group_by(ier_bk) |> 
+    filter(any(training == "Yes")) |> 
+    ungroup() |> 
+    filter(!redcap_event_name %in% c("Ground Truth", "Extraction 2", "Extraction 1")) |> 
+    group_by(ier_bk, redcap_event_name) |>
+    mutate(
+      value = case_when(
+        # I only want to change the value where item == "no_tumor"
+        item == "no_tumor" & 
+          any(value[item == "response_to_trt" | item == "response_to_trt_pet"] == "Not applicable") ~ "Not applicable",
+        TRUE ~ value
+      )
+    ) |> 
+    ungroup() |> 
+    left_join(ground_truth_long, by = c("ier_bk", "item")) |> 
+    # where NA for ground truth and value, then question was not applicable -> remove
+    filter(!is.na(value) & !is.na(truth)) |> 
+    mutate(
+        correct = if_else(value == truth, 1, 0),
+        task  = case_when(
+          str_detect(item, "metastasis") ~ "Metastasis",
+          str_detect(item, "primary_tumor") ~ "Diagnosis",
+          str_detect(item, "response_to_trt") ~ "Response to Treatment",
+          str_detect(item, "no_tumor") ~ "Radiologically Tumor Free",
+          TRUE ~ NA
+        ),
+        report_length = nchar(imaging_report)
+    )
+
+data_old  <- analysis_data  |> 
+  mutate(
+    grp = case_when(
+      model == "llama3.3:70b-instruct-q5_K_M" | model == "llama3.3:70b" ~ "llama3.3:70b",
+      model == "mistral-small:24b-instruct-2501-q4_K_M" | model == "mistral-small:24b" ~ "mistral-small:24b",
+      model == "rndcalcle01.qwen3:32b" | model == "qwen3:32b" ~ "qwen3:32b",
+      model == "rndcalcle01.qwq:32b" | model == "qwq:32b" ~ "qwq:32b",
+    ),
+    grp = factor(grp, levels = c("llama3.3:70b", "mistral-small:24b", "qwen3:32b", "qwq:32b")) 
+    ) |> 
+  mutate (v = "0")
+```
+
+```{r prep-data-new}
+#| output: false
+data_new <- data |> 
+  filter(ier_bk %in% training_ids) |> 
+  mutate(
+    human = if_else(!str_detect(redcap_event_name, "LLM"), 1, 0),
+    grp = case_when(
+      human == 1 ~ "human",
+      model == "llama3.3:70b-instruct-q5_K_M" ~ "llama3.3:70b",
+      model == "mistral-small:24b-instruct-2501-q4_K_M" ~ "mistral-small:24b",
+      model == "rndcalcle01.qwen3:32b" | model == "qwen3:32b" ~ "qwen3:32b",
+      model == "rndcalcle01.qwq:32b" | model == "qwq:32b" ~ "qwq:32b",
+      model == "gpt-oss:120b" ~ "gpt-oss:120b",
+    ),
+    grp = factor(grp, levels = c("human", "llama3.3:70b", "mistral-small:24b", "qwen3:32b", "qwq:32b",  "gpt-oss:120b"))) |> 
+  mutate ( v = "1") |> 
+  filter(!redcap_event_name %in% c("Extraction 1", "Extraction 2")) |> 
+  filter(!grp == "gpt-oss:120b")
+```
+
+```{r llm-prompt-refinement-improvement}
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "The plot shows the improvement in accuracy (post - pre prompt refinement) for each Large Language Model (LLM) across the primary tasks in the prompt optimization set (n = 100). Positive values indicate an improvement in accuracy after prompt refinement. Error bars represent 95% confidence intervals calculated using cluster-robust standard errors. We gained access to GPT-OSS:120B after prompt optimization, hence it is not included in this analysis."
+
+combined <- bind_rows(data_old, data_new) |>
+  mutate(grp = droplevels(grp))
+
+llm_improv <- glm(
+    correct ~ grp * (task + v),
+    data = combined,
     family = binomial(link = "logit")
   )
-summary(model_acc)
-```
 
-```{r fig-task-accuracy-all}
-#| fig-width: 8
-#| fig-height: 6
-#| fig-cap: "The plot shows the accuracy with 95% confidence intervals of human extractors compared to the ground truth, stratified by task. "
-#| echo: false
-plot_predictions(model_acc, by = "task", type = "response", vcov = ~ier_bk) + 
-  scale_y_continuous(limits = c(0, 1)) +
+plot_comparisons(
+  llm_improv,
+  variables = "v",
+  by = c("task", "grp"),
+  type = "response",
+  vcov = ~ier_bk
+) +
   labs(
+    color = "LLM",
     x = "",
-    y = "Accuracy"
-  ) 
-```
-
-{{< pagebreak >}}
-
-## Supplementary Figure 3
-
-```{r fig-task-accuracy-pet-ct}
-#| fig-width: 8
-#| fig-height: 6
-#| fig-cap: "The plot shows the accuracy with 95% confidence intervals of human extractors compared to the ground truth, stratified by task and PET-CT vs non-PET-CT scans."
-#| echo: false
-plot_predictions(model_acc, by = c("task", "pet_ct"), type = "response", vcov = ~ier_bk) + 
-  scale_y_continuous(limits = c(0, 1)) +
-  labs(
-    x = "",
-    y = "Accuracy",
-    color = "PET-Scan"
+    y = "Accuracy Difference (post - pre)"
   ) +
-    theme(legend.position = "bottom")
+    coord_flip() +
+    theme(
+      legend.position = "bottom"
+    ) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = "grey50")
+
+ggsave(
+  filename = here::here("output", "oncology", "figures", "llm_prompt_refinement_improvement.png"),
+  plot = last_plot(),
+  width = 8, height = 12, dpi = 300
+)
 ```
 
 {{< pagebreak >}}
 
-## Supplementary Figure 4
+## eFigure 5
 
 ```{r fig-diagnosis-accuracy}
 #| warning: false
 #| echo: false
 #| fig-width: 10
-#| fig-height: 6
+#| fig-height: 12
 #| fig-cap: "This plot shows the accuracy with 95% confidence intervals of human and LLMS extraction compared to the ground truth, stratified by diagnosis. Diagnoses with less than 20 extractions were grouped into 'Other'. Confidence intervals were calculated using cluster bootstraping resampling (1000 samples)."
 
 # --- Human Accuracy by Diagnosis with Bootstrap CIs ---
@@ -202,7 +402,7 @@ pal_models <- c(
 
 # ensure factor levels where needed
 data_test <- data_test |>
-  mutate(grp = factor(grp, levels = ord_grp))
+  mutate(grp = factor(grp, levels = ord))
 
 # example application to diagnosis plot
 dodge <- position_dodge(width = 0.5)
@@ -217,20 +417,19 @@ all_values <- diagnosis_boot_results |> distinct(value) |> pull(value) |> as.cha
 
 diagnosis_boot_results |>
   mutate(
-    grp = factor(grp, levels = ord_grp),
+    grp = factor(grp, levels = ord),
     value = factor(value, levels = c(human_order, setdiff(all_values, human_order)))
   ) |>
-  filter(!(grp == "qwen3:32b" | grp == "qwq:32b")) |>
+  # filter(!(grp == "qwen3:32b" | grp == "qwq:32b")) |>
   ggplot(aes(x = value, y = point.estimate, color = grp, group = grp)) +
   geom_pointrange(
     aes(ymin = conf.low, ymax = conf.high),
     position = dodge,
-    size = 1,
-    fatten = 2
+    size = 0.5,
   ) +
   coord_flip() +
   scale_y_continuous(limits = c(0, 1)) +
-  scale_color_manual(values = pal_models, breaks = ord_grp, name = "") +
+  scale_color_manual(values = pal_models, breaks = ord, name = "") +
   labs(x = "", y = "Accuracy") +
   theme(legend.position = "bottom")
 
@@ -244,275 +443,8 @@ ggsave(
 
 {{< pagebreak >}}
 
-## Supplementary Figure 5
 
-```{r model-rtt-pet}
-#| echo: false
-#| output: false
-
-# --- Human Accuracy by Diagnosis with Bootstrap CIs ---
-model_rsp_trt <- glm(
-    correct ~ value,
-    data = analysis_data_human |> filter(task == "Response to Treatment", pet_ct == FALSE),
-    family = binomial(link = "logit")
-  )
-
-summary(model_rsp_trt)
-```
-
-```{r fig-accuracy-human-responsetotreatment-nonpet}
-#| echo: false
-#| warning: false
-#| fig-width: 8
-#| fig-height: 6
-#| fig-cap: "This plot shows the accuracy with 95% confidence intervals of human extractors compared to the ground truth, stratified by extracted response for Response to Treatment (non-PET-CT scans). Confidence intervals were calculated using cluster bootstraping resampling (1000 samples)."
-
-# Bootstrap approach for Response to Treatment (non-PET-CT)
-rtt_data <- analysis_data_human |> 
-  filter(task == "Response to Treatment", pet_ct == FALSE)
-
-boot_samples_rtt <- group_bootstraps(rtt_data, group = ier_bk, times = 100)
-
-boot_results_rtt <- map_dfr(boot_samples_rtt$splits, function(split) {
-  boot_data <- analysis(split)
-  mod <- glm(
-    correct ~ value,
-    data = boot_data,
-    family = binomial(link = "logit")
-  )
-  avg_predictions(mod, by = "value", vcov = FALSE)
-})
-
-# Calculate bootstrap confidence intervals
-rtt_boot_results <- boot_results_rtt |>
-  as_tibble() |>
-  group_by(value) |> 
-  summarise(
-    point.estimate = mean(estimate),
-    std.error = sd(estimate),
-    conf.low = quantile(estimate, 0.025),
-    conf.high = quantile(estimate, 0.975)
-  )
-
-# Plot
-rtt_boot_results |>
-  mutate(value = fct_reorder(value, point.estimate)) |>
-  ggplot(aes(x = value, y = point.estimate)) +
-  geom_pointrange(
-    aes(ymin = conf.low, ymax = conf.high),
-    size = 1,
-    fatten = 2
-  ) +
-  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.25)) +
-  labs(
-    x = "",
-    y = "Accuracy"
-  )
-```
-
-{{< pagebreak >}}
-
-## Supplementary Figure 6
-
-```{r model-rtt-nonpet}
-#| echo: false
-#| output: false
-model_rsp_trt_pet <- glm(
-    correct ~ value,
-    data = analysis_data_human |> filter(task == "Response to Treatment", pet_ct == T),
-    family = binomial(link = "logit")
-  )
-
-summary(model_rsp_trt_pet)
-```
-
-```{r fig-accuracy-human-responsetotreatment-pet}
-#| echo: false
-#| warning: false
-#| fig-width: 8
-#| fig-height: 6
-#| fig-cap: "This plot shows the accuracy with 95% confidence intervals of human extractors compared to the ground truth, stratified by extracted response for Response to Treatment (PET-CT scans). Confidence intervals were calculated using cluster bootstraping resampling (1000 samples)."
-# Bootstrap approach for Response to Treatment (PET-CT)
-
-rtt_pet_data <- analysis_data_human |> 
-  filter(task == "Response to Treatment", pet_ct == TRUE)
-
-boot_samples_rtt_pet <- group_bootstraps(rtt_pet_data, group = ier_bk, times = boot_R)
-
-boot_results_rtt_pet <- map_dfr(boot_samples_rtt_pet$splits, function(split) {
-  boot_data <- analysis(split)
-  mod <- glm(
-    correct ~ value,
-    data = boot_data,
-    family = binomial(link = "logit")
-  )
-  avg_predictions(mod, by = "value", vcov = FALSE)
-})
-
-# Calculate bootstrap confidence intervals
-rtt_pet_boot_results <- boot_results_rtt_pet |>
-  as_tibble() |>
-  group_by(value) |> 
-  summarise(
-    point.estimate = mean(estimate),
-    std.error = sd(estimate),
-    conf.low = quantile(estimate, 0.025),
-    conf.high = quantile(estimate, 0.975)
-  )
-
-# Plot
-rtt_pet_boot_results |>
-  mutate(value = fct_reorder(value, point.estimate)) |>
-  ggplot(aes(x = value, y = point.estimate)) +
-  geom_pointrange(
-    aes(ymin = conf.low, ymax = conf.high),
-    size = 1,
-    fatten = 2
-  ) +
-  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.25)) +
-  labs(
-    x = "",
-    y = "Accuracy"
-  )
-```
-
-{{< pagebreak >}}
-
-## Supplementary Table 1
-
-```{r}
-#| echo: false
-#| output: false
-m_acc3 <- glm(
-    correct ~ grp * task,
-    data = data_test, 
-    family = binomial(link = "logit") )
-
-avg_predictions(m_acc3,by = "grp", type = "response", vcov = ~ ier_bk)
-avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
-```
-
-```{r tbl-acc-secondary-endpoints}
-#| echo: false
-#| tbl-cap: "Accuracy with 95% confidence intervals for diagnosis, radiological absence of tumor, and across all tasks, by human extractors and LLMs, along with comparisons to human performance."
-
-# --- Display order for groups and tasks --------------------------------------
-ord_grp  <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
-              "mistral-small:24b","llama3.3:70b")
-ord_task <- c("Diagnosis","Radiologically Tumor Free","Overall")
-
-# -- Fit Model for Inference ---
-
-m_acc2 <- glm(
-    correct ~ grp * task,
-    data = data_test  |> filter(task == "Diagnosis" | task == "Radiologically Tumor Free"),
-    family = binomial(link = "logit")
-  )
-
-
-# --- Predicted accuracies by task × group-----------------
-pred_task <- avg_predictions(
-  m_acc2, by = c("grp","task"), type = "response",
-  vcov = ~ier_bk) |>
-  data.frame() |>
-  mutate(
-    task, grp,
-    accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high),
-    .keep = "none"
-  )
-# --- Predicted overall accuracies by group ---------------------------------
-pred_overall <- avg_predictions(
-  m_acc3, by = "grp", type = "response",
-  vcov = ~ier_bk) |>
-  data.frame() |>
-  mutate(task = "Overall") |>
-  mutate(
-    task, grp,
-    accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high),
-    .keep = "none"
-  )
-
-pred_all <- bind_rows(pred_task, pred_overall)
-
-# --- Model vs. human comparisons within each task --------------------------
-comp_task <- avg_comparisons(
-  m_acc2, variable = "grp", by = "task", type = "response",
-  vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.95) |>
-  data.frame() |>
-  mutate(
-    grp = str_replace(contrast, "\\s*-\\s*human$", ""),
-    noninferior = conf.low > -0.05
-  ) |>
-  mutate(
-    task, grp,
-    mod_vs_human = sprintf("%+.1f (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
-    p.value.noninf,
-    .keep = "none"
-  )
-# --- Overall comparisons vs human -----------------------------------------
-comp_overall <- avg_comparisons(
-  m_acc3, variable = "grp", type = "response",
-  vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.95) |>
-  data.frame() |>
-  mutate(
-    task = "Overall",
-    grp = str_replace(contrast, "\\s*-\\s*human$", ""),
-    noninferior = conf.low > -0.05
-  ) |>
-  mutate(
-    task, grp,
-    mod_vs_human= sprintf("%+.1f (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
-    p.value.noninf,
-    .keep = "none"
-  )
-
-comp_all <- bind_rows(comp_task, comp_overall)
-
- # --- Assemble table data -------------------------------------------------
-tab_all <- pred_all |>
-  left_join(comp_all, by = c("task","grp")) |>
-  mutate(
-    task = factor(task, levels = ord_task),
-    grp  = factor(grp,  levels = ord_grp)
-  ) |>
-  arrange(task, grp) |>
-  mutate(
-    mod_vs_human = if_else(grp == "human", "", mod_vs_human),
-  ) |>
-  select(task, grp, accuracy, mod_vs_human,p.value.noninf)
-
-# --- Build gt table --------------------------------------------------------
-pred_tbl_2 <- gt(tab_all, groupname_col = "task") |>
-  cols_label(
-    task = "Task", 
-    grp = "",
-    accuracy = "Accuracy (95% CI)",
-    mod_vs_human = "Difference (95% CI)",
-    p.value.noninf  = "P-value NI"
-  ) |>
-  fmt(
-    columns = p.value.noninf,
-    fns = function(x) {
-      ifelse(is.na(x), "—", 
-             ifelse(x < 0.001, "<0.001", 
-                    sprintf("%.3f", x)))
-    }
-  ) |>
-  tab_options(data_row.padding = px(4))
-
-pred_tbl_2
-
-# --- Export table -----------------------------------------------------------
-gt::gtsave(
-  pred_tbl_2,
-  filename = "supp-table-1-secondary-outcomes.docx",
-  path = here::here("output", "oncology", "tables")
-)
-```
-
-{{< pagebreak >}}
-
-## Supplementary Figure 7 {#sec-supp-fig-7}
+## eFigure 6
 
 ```{r fig-ppv-npv-meta}
 #| fig-width: 10
@@ -526,12 +458,12 @@ dat_meta <- data_test |>
   mutate(truth = if_else(truth == "Yes", "Sensitivity", "Specificity"))
 
 # Desired row order for models/groups
-ord_grp <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
+ord <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
              "mistral-small:24b","llama3.3:70b")
 
 # Apply the ordering
 dat_meta <- dat_meta |>
-  mutate(grp = factor(grp, levels = ord_grp))
+  mutate(grp = factor(grp, levels = ord))
 
 # --- 2) Model for Sensitivity/Specificity ------------------------------------
 model_meta_sens_spec_llm <- glm(
@@ -596,7 +528,7 @@ metrics_long <- bind_rows(
   ppv_npv
 ) |>
   mutate(
-    grp = factor(grp, levels = ord_grp),
+    grp = factor(grp, levels = ord),
     Metric = factor(Metric, levels = c("Sensitivity", "Specificity", "PPV", "NPV"))
   )
 
@@ -618,18 +550,17 @@ metrics_long |>
   geom_pointrange(
     aes(ymin = conf.low, ymax = conf.high),
     position = dodge,
-    size = 1,
-    fatten = 2
+    size = 0.3
   ) +
   scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.25), labels = percent) +
-  scale_color_manual(values = pal_models, breaks = ord_grp, name = "") +
+  scale_color_manual(values = pal_models, breaks = ord, name = "") +
   labs(x = "", y = "Value") +
   theme(legend.position = "bottom")
 ```
 
 {{< pagebreak >}}
 
-## Supplementary Figure 8
+## eFigure 7
 
 ```{r confusion-meta-llm}
 #| echo: false
@@ -702,7 +633,7 @@ p_cm <- ggplot(cm_tidy, aes(x = .pred, y = .truth, fill = pct)) +
   theme_minimal(base_size = 12) +
   theme(panel.grid = element_blank(), strip.text = element_text(face = "bold"))
 
-print(p_cm)
+p_cm
 
 ggsave(
   filename = here::here("output", "oncology", "suppfigures", "confusion_matrices_per_grp-meta.png"),
@@ -712,7 +643,7 @@ ggsave(
 
 {{< pagebreak >}}
 
-## Supplementary Figure 8
+## eFigure 8
 
 ```{r}
 #| echo: false
@@ -730,7 +661,7 @@ cms <- lapply(split(prog, prog$grp), function(d) {
   with(d, table(Extracted = Extracted, Truth = Truth))
 })
 
-for (m in intersect(ord_grp, names(cms))) {
+for (m in intersect(ord, names(cms))) {
   cat("\n###", m, "\n")
   print(cms[[m]])
 }
@@ -744,7 +675,7 @@ for (m in intersect(ord_grp, names(cms))) {
 
 
 prog <- prog |>
-    mutate(grp = factor(grp, levels = intersect(ord_grp, unique(grp)))) 
+    mutate(grp = factor(grp, levels = intersect(ord, unique(grp)))) 
   
 cm_prog <- prog |>
   mutate(
@@ -773,7 +704,7 @@ p_cm_prog <- ggplot(cm_prog, aes(x = Extracted, y = Truth, fill = pct)) +
   theme_minimal(base_size = 12) +
   theme(panel.grid = element_blank(), strip.text = element_text(face = "bold"))
 
-print(p_cm_prog)
+p_cm_prog
 
 ggsave(
   filename = here::here("output", "oncology", "suppfigures", "confusion_matrices_response_to_treatment.png"),
@@ -784,7 +715,555 @@ ggsave(
 
 {{< pagebreak >}}
 
-## Supplementary Table 2
+## eFigure 9
+
+```{r fig-main-primary-endpoints}
+#| fig-width: 8
+#| fig-height: 11
+#| fig-cap: "Bayesian reanalysis of the accuracy for classification of metastasis and response to treatment. Top panels (A, B) show the posterior distributions of accuracy (probability of correct response) for humans and each LLM across the two primary tasks with 66% and 95% credible intervals. Bottom panels (C, D) show the posterior distributions of the contrasts (LLM minus human) and 90% credible intervals for each LLM compared to humans, with the non-inferiority margin indicated by the solid red line at -0.05."
+#| echo: false
+#| warning: false
+
+# -------- Data for difference panels ----------------------------------------
+dfm <- cache_df("avg_comp_metastasis", function() {
+  avg_comparisons(
+    m_acc,
+    newdata  = data_test |> filter(task == "Metastasis"),
+    variable = "grp", by = "task", type = "response",
+    re_formula = NULL
+  ) |>  
+    posterior_draws() |> 
+    data.frame() |>
+    mutate(contrast = factor(contrast, levels = contrast_lvls))
+})
+
+dfrtt <- cache_df("avg_comp_response_to_treatment", function() {
+  avg_comparisons(
+    m_acc,
+    newdata  = data_test |> filter(task == "Response to Treatment"),
+    variable = "grp", by = "task", type = "response",
+    re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |>
+    mutate(contrast = factor(contrast, levels = contrast_lvls))
+})
+
+# Shared y-limits for difference panels
+lims <- c(-0.25, 0)
+
+# -------- TOP: Accuracy (A, B) ----------------------------------------------
+# Enforce identical x order by factoring 'grp' in newdata
+# new_m   <- data_test |> filter(task == "Metastasis") |> mutate(grp = factor(grp, levels = ord_legend))
+# new_rtt <- data_test |> filter(task == "Response to Treatment") |> mutate(grp = factor(grp, levels = ord_legend))
+
+theme_top <- theme_medical() +
+  theme(
+    panel.grid.major.y = element_line(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+pred_data_m <- cache_df("avg_pred_metastasis", function() {
+  avg_predictions(
+    m_acc, 
+    newdata = data_test |> filter(task == "Metastasis"), 
+    by = "grp", 
+    type = "response", 
+    re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |>
+    mutate(grp = factor(grp, levels = ord_legend))
+})
+
+pred_data_rtt <- cache_df("avg_pred_response_to_treatment", function() {
+  avg_predictions(
+    m_acc, 
+    newdata = data_test |> filter(task == "Response to Treatment"), 
+    by = "grp", 
+    type = "response", 
+    re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |>
+    mutate(grp = factor(grp, levels = ord_legend))
+})
+
+# Build plots manually with position control
+pA <- ggplot(pred_data_m, aes(x = grp, y = draw, color = grp, fill = grp)) +
+  stat_halfeye(
+    width = 0.6,         # Width of the "slab"
+    .width = c(0.66, 0.95), # Width of credible intervals shown at bottom
+    alpha = 0.7,
+    point_size = 1.2 # Use Median and Quantile Intervals
+  ) +
+  shared_color + shared_fill +
+  scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, 0.1)) +
+  scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
+  labs(tag = "A)", x = NULL, y = "Probability of Correct Response", title = "Metastasis") +
+  theme_top
+
+pB <- ggplot(pred_data_rtt, aes(x = grp, y = draw, color = grp, fill = grp)) +
+  stat_halfeye(
+    width = 0.6,
+    .width = c(0.66, 0.95),
+    alpha = 0.7,
+    point_size = 1.2
+  ) +
+  shared_color + shared_fill +
+  scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, 0.1)) +
+  scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
+  labs(tag = "B)", x = NULL, y = NULL, title = "Response to Treatment") +
+  theme_top
+
+
+# -------- BOTTOM: Difference vs. human (C, D) --------------------------------
+theme_bottom <- theme_medical() +
+  theme(
+    # axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.major.x = element_line(colour = "grey85"),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank()
+  )
+
+pC <- ggplot(dfm, aes(x = draw, y = contrast)) +
+  stat_halfeye(
+    .width = 0.90,
+    alpha = 0.8,
+    slab_color = "white",
+    slab_linewidth = 0.5,
+    point_size = 1.2
+  ) +
+  geom_vline(xintercept = 0,     linetype = "dotted") +
+  geom_vline(xintercept = -0.05, linetype = "solid", color = "red") +
+  scale_x_continuous(limits = lims, expand = expansion(mult = 0.02)) +
+  labs(tag = "C)", title = "Metastasis", y = NULL, x = "estimate") +
+  theme_bottom +
+  theme(legend.position = "none")
+
+pD <- ggplot(dfrtt, aes(x = draw, y = contrast)) +
+  stat_halfeye(
+    .width = 0.90,
+    alpha = 0.8,
+    slab_color = "white",
+    slab_linewidth = 0.5,
+    point_size = 1.2
+  ) +
+  geom_vline(xintercept = 0,     linetype = "dotted") +
+  geom_vline(xintercept = -0.05, linetype = "solid", color = "red") +
+  scale_x_continuous(limits = lims, expand = expansion(mult = 0.02)) +
+  labs(tag = "D)", title = "Response to Treatment", y = NULL, x = "estimate") +
+  theme_bottom +
+  theme(legend.position = "none")
+
+# -------- Assemble & save ----------------------------------------------------
+
+top_row <- (pA + pB) + 
+  plot_layout(guides = "collect") +
+  # for some reasons this works
+   plot_annotation(theme = theme(legend.position = "bottom"))
+
+# Combine with bottom plots (no legend)
+full_fig_primary <- top_row / pC / pD +
+  plot_layout(heights = c(6, 3, 3))
+
+full_fig_primary
+
+ggsave(
+  filename = here::here("output", "oncology", "figures", "bayes_full_primary.png"),
+  plot = full_fig_primary, width = 8, height = 12, dpi = 300
+)
+ggsave(
+  filename = here::here("output", "oncology", "figures", "bayes_full_primary.svg"),
+  plot = full_fig_primary, width = 8, height = 12, dpi = 300
+)
+```
+
+{{< pagebreak >}}
+
+## eFigure 10
+
+```{r fig-diff-secondary-endpoints}
+#| echo: false
+#| warning: false
+#| fig-cap: "Bayesian reanalysis of contrasts (LLM minus human) for secondary endpoints (Diagnosis, Radiologically Tumor Free, Overall Accuracy); posterior distributions with 90% credible intervals shown."
+#| fig-height: 8
+#| fig-width: 10
+
+# A) Diagnosis
+df_diag <- cache_df("avg_comp_diagnosis", function() {
+  avg_comparisons(
+    m_acc,
+    newdata = data_test |> filter(task == "Diagnosis"),
+    variable = "grp", by = "task", type = "response",
+    re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |> 
+    mutate(contrast = factor(contrast, levels = contrast_lvls))
+})
+
+# B) Radiologically Tumor Free
+df_rtf <- cache_df("avg_comp_tumor_free", function() {
+  avg_comparisons(
+    m_acc,
+    newdata = data_test |> filter(task == "Radiologically Tumor Free"),
+    variable = "grp", by = "task", type = "response",
+    re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |> 
+    mutate(contrast = factor(contrast, levels = contrast_lvls))
+})
+
+# C) Overall Accuracy
+# Note: calculating marginal contrast across the whole analysis sample
+df_over <- cache_df("avg_comp_overall", function() {
+  avg_comparisons(
+    m_acc,
+    newdata = data_test, # Uses full sample to average over all tasks
+    variable = "grp", type = "response",
+    re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |> 
+    mutate(contrast = factor(contrast, levels = contrast_lvls))
+})
+
+## 3) LIMITS --------------------------------------------------------------
+# Calculate common x-axis limits across all three posterior sets
+all_draws <- c(df_diag$draw, df_rtf$draw, df_over$draw)
+lims <- range(c(quantile(all_draws, probs = c(0.001, 0.999)), -0.05, 0.05))
+
+## 4) PLOTS ---------------------------------------------------------------
+
+# Plot 1: Diagnosis
+p_diag <- ggplot(df_diag, aes(x = draw, y = contrast)) +
+  stat_halfeye(
+    
+    .width = 0.90,
+    alpha = 0.8,
+    slab_color = "white",
+    slab_linewidth = 0.5,
+    point_size = 1.2
+  ) +
+  geom_vline(xintercept = 0,     linetype = "dotted") +
+  geom_vline(xintercept = -0.05, linetype = "solid", color = "red") +
+  scale_x_continuous(limits = lims, expand = expansion(mult = 0.02)) +
+  labs(title = "Diagnosis", y = NULL, x = NULL) +
+  theme_bottom
+
+# Plot 2: Radiologically Tumor Free
+p_tf <- ggplot(df_rtf, aes(x = draw, y = contrast)) +
+  stat_halfeye(
+    .width = 0.90,
+    alpha = 0.8,
+    slab_color = "white",
+    slab_linewidth = 0.5,
+    point_size = 1.2
+  ) +
+  geom_vline(xintercept = 0,     linetype = "dotted") +
+  geom_vline(xintercept = -0.05, linetype = "solid", color = "red") +
+  scale_x_continuous(limits = lims, expand = expansion(mult = 0.02)) +
+  labs(title = "Radiologically Tumor Free", y = NULL, x = NULL) +
+  theme_bottom
+
+# Plot 3: Overall
+p_over <- ggplot(df_over, aes(x = draw, y = contrast)) +
+  stat_halfeye(
+    .width = 0.90,
+    alpha = 0.8,
+    slab_color = "white",
+    slab_linewidth = 0.5,
+    point_size = 1.2
+  ) +
+  geom_vline(xintercept = 0,     linetype = "dotted") +
+  geom_vline(xintercept = -0.05, linetype = "solid", color = "red") +
+  scale_x_continuous(limits = lims, expand = expansion(mult = 0.02)) +
+  labs(title = "Overall accuracy", y = NULL, x = "estimate") +
+  theme_bottom
+
+## 5) PATCHWORK -----------------------------------------------------------
+
+combined_sec <- p_diag / p_tf / p_over + 
+  plot_annotation(tag_levels = "A")
+
+combined_sec   
+
+## 6) SAVE ----------------------------------------------------------------
+
+ggsave(
+  filename = here("output", "oncology", "figures", "bayes_secondary_contrast.png"),
+  plot = combined_sec,
+  width = 8, height = 10.5, dpi = 300
+)
+
+ggsave(
+  filename = here("output", "oncology", "figures", "bayes_secondary_contrast.svg"),
+  plot = combined_sec,
+  width = 8, height = 10.5, dpi = 300
+)
+```
+
+{{< pagebreak >}}
+
+## eFigure 11
+
+```{r fig-acc-secondary-endpoints}
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "Bayesian reanalysis of accuracy (probability of correct response) for secondary endpoints (Diagnosis, Radiologically Tumor Free, Overall Accuracy); posterior distributions with 66% and 95% credible intervals shown."
+#| warning: false
+
+# A) Diagnosis
+pred_diag <- cache_df("avg_pred_diagnosis", function() {
+  avg_predictions(
+    m_acc,
+    newdata = data_test |> filter(task == "Diagnosis"),
+    by = "grp", type = "response", re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |> 
+    mutate(grp = factor(grp, levels = ord_legend))
+})
+
+# B) Radiologically Tumor Free
+pred_rtf <- cache_df("avg_pred_tumor_free", function() {
+  avg_predictions(
+    m_acc,
+    newdata = data_test |> filter(task == "Radiologically Tumor Free"),
+    by = "grp", type = "response", re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |> 
+    mutate(grp = factor(grp, levels = ord_legend))
+})
+
+# C) Overall (Marginalized over all tasks in data_test)
+pred_over <- cache_df("avg_pred_overall", function() {
+  avg_predictions(
+    m_acc,
+    newdata = data_test, 
+    by = "grp", type = "response", re_formula = NULL
+  ) |> 
+    posterior_draws() |> 
+    data.frame() |> 
+    mutate(grp = factor(grp, levels = ord_legend))
+})
+
+## 3) PLOTS ---------------------------------------------------------------
+
+# --- PLOT 1: Diagnosis ---------------------------------------------------
+p1 <- ggplot(pred_diag, aes(x = grp, y = draw, color = grp, fill = grp)) +
+  stat_halfeye(
+    width = 0.6,
+    .width = c(0.66, 0.95),
+    alpha = 0.7,
+    
+    point_size = 1.2
+  ) +
+  shared_color + shared_fill +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
+  labs(title = "Diagnosis", y = "Probability of Correct Response", x = NULL) +
+  theme_top
+
+# --- PLOT 2: Radiologically Tumor Free -----------------------------------
+p2 <- ggplot(pred_rtf, aes(x = grp, y = draw, color = grp, fill = grp)) +
+  stat_halfeye(
+    width = 0.6,
+    .width = c(0.66, 0.95),
+    alpha = 0.7,
+    point_size = 1.2
+  ) +
+  shared_color + shared_fill +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
+  labs(title = "Radiologically Tumor Free", y = NULL, x = NULL) +
+  theme_top
+
+# --- PLOT 3: Overall -----------------------------------------------------
+p3 <- ggplot(pred_over, aes(x = grp, y = draw, color = grp, fill = grp)) +
+  stat_halfeye(
+    width = 0.6,
+    .width = c(0.66, 0.95),
+    alpha = 0.7,
+    point_size = 1.2
+  ) +
+  shared_color + shared_fill +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
+  labs(title = "Overall Accuracy", y = NULL, x = NULL) +
+  theme_top
+
+## 4) COMBINE -------------------------------------------------------------
+
+combined_Acc <- p1 + p2 + p3 + 
+  plot_annotation(tag_levels = "A") + 
+  plot_layout(guides = "collect") +
+  plot_annotation(theme = theme(legend.position = "bottom"))
+
+combined_Acc
+
+## 5) SAVE ----------------------------------------------------------------
+
+ggsave(
+  filename = here::here("output", "oncology", "figures", "bayes_secondary_accuracy.png"),
+  plot = combined_Acc,
+  width = 10, height = 6, dpi = 300
+)
+
+ggsave(
+  filename = here::here("output", "oncology", "figures", "bayes_secondary_accuracy.svg"),
+  plot = combined_Acc,
+  width = 10, height = 6, dpi = 300
+)
+```
+
+{{< pagebreak >}}
+
+# eTables
+
+## eTable 1
+
+```{r}
+#| echo: false
+#| output: false
+m_acc3 <- glm(
+    correct ~ grp * task,
+    data = data_test, 
+    family = binomial(link = "logit") )
+
+avg_predictions(m_acc3,by = "grp", type = "response", vcov = ~ ier_bk)
+avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
+```
+
+```{r tbl-acc-secondary-endpoints}
+#| echo: false
+#| tbl-cap: "Accuracy with 95% confidence intervals for diagnosis, radiological absence of tumor, and across all tasks, by human extractors and LLMs, along with comparisons to human performance."
+
+# --- Display order for groups and tasks --------------------------------------
+ord  <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
+              "mistral-small:24b","llama3.3:70b")
+ord_task <- c("Diagnosis","Radiologically Tumor Free","Overall")
+
+# -- Fit Model for Inference ---
+
+m_acc2 <- glm(
+    correct ~ grp * task,
+    data = data_test  |> filter(task == "Diagnosis" | task == "Radiologically Tumor Free"),
+    family = binomial(link = "logit")
+  )
+
+
+# --- Predicted accuracies by task × group-----------------
+pred_task <- avg_predictions(
+  m_acc2, by = c("grp","task"), type = "response",
+  vcov = ~ier_bk) |>
+  data.frame() |>
+  mutate(
+    task, grp,
+    accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high),
+    .keep = "none"
+  )
+# --- Predicted overall accuracies by group ---------------------------------
+pred_overall <- avg_predictions(
+  m_acc3, by = "grp", type = "response",
+  vcov = ~ier_bk) |>
+  data.frame() |>
+  mutate(task = "Overall") |>
+  mutate(
+    task, grp,
+    accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high),
+    .keep = "none"
+  )
+
+pred_all <- bind_rows(pred_task, pred_overall)
+
+# --- Model vs. human comparisons within each task --------------------------
+comp_task <- avg_comparisons(
+  m_acc2, variable = "grp", by = "task", type = "response",
+  vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.95) |>
+  data.frame() |>
+  mutate(
+    grp = str_replace(contrast, "\\s*-\\s*human$", ""),
+    noninferior = conf.low > -0.05
+  ) |>
+  mutate(
+    task, grp,
+    mod_vs_human = sprintf("%+.1f (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
+    p.value.noninf,
+    .keep = "none"
+  )
+# --- Overall comparisons vs human -----------------------------------------
+comp_overall <- avg_comparisons(
+  m_acc3, variable = "grp", type = "response",
+  vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.90) |>
+  data.frame() |>
+  mutate(
+    task = "Overall",
+    grp = str_replace(contrast, "\\s*-\\s*human$", ""),
+    noninferior = conf.low > -0.05
+  ) |>
+  mutate(
+    task, grp,
+    mod_vs_human= sprintf("%+.1f (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
+    p.value.noninf,
+    .keep = "none"
+  )
+
+comp_all <- bind_rows(comp_task, comp_overall)
+
+ # --- Assemble table data -------------------------------------------------
+tab_all <- pred_all |>
+  left_join(comp_all, by = c("task","grp")) |>
+  mutate(
+    task = factor(task, levels = ord_task),
+    grp  = factor(grp,  levels = ord)
+  ) |>
+  arrange(task, grp) |>
+  mutate(
+    mod_vs_human = if_else(grp == "human", "", mod_vs_human),
+  ) |>
+  select(task, grp, accuracy, mod_vs_human,p.value.noninf)
+
+# --- Build gt table --------------------------------------------------------
+pred_tbl_2 <- gt(tab_all, groupname_col = "task") |>
+  cols_label(
+    task = "Task", 
+    grp = "",
+    accuracy = "Accuracy (95% CI)",
+    mod_vs_human = "Difference (90% CI)",
+    p.value.noninf  = "P-value NI"
+  ) |>
+  fmt(
+    columns = p.value.noninf,
+    fns = function(x) {
+      ifelse(is.na(x), "—", 
+             ifelse(x < 0.001, "<0.001", 
+                    sprintf("%.3f", x)))
+    }
+  ) |>
+  tab_options(data_row.padding = px(4))
+
+pred_tbl_2
+
+# --- Export table -----------------------------------------------------------
+gt::gtsave(
+  pred_tbl_2,
+  filename = "supp-table-1-secondary-outcomes.docx",
+  path = here::here("output", "oncology", "tables")
+)
+```
+
+{{< pagebreak >}}
+
+## eTable 2
 
 ```{r tbl-ppv-npv-meta}
 #| echo: false
@@ -796,12 +1275,12 @@ dat_meta <- data_test |>
   mutate(truth = if_else(truth == "Yes", "Sensitivity", "Specificity"))
 
 # Desired row order for models/groups
-ord_grp <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
+ord <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
              "mistral-small:24b","llama3.3:70b")
 
 # Apply the ordering
 dat_meta <- dat_meta |>
-  mutate(grp = factor(grp, levels = ord_grp))
+  mutate(grp = factor(grp, levels = ord))
 
 # --- 2) Model for Sensitivity/Specificity ------------------------------------
 model_meta_sens_spec_llm <- glm(
@@ -868,12 +1347,12 @@ ppv_npv <- pred_val_grp |>
   ) |>
   arrange(Metric, grp) |>
   pivot_wider(names_from = Metric, values_from = pretty) |>
-  arrange(factor(grp, levels = ord_grp))
+  arrange(factor(grp, levels = ord))
 
 # --- 4) Join into a single table: rows = models, cols = four metrics ----------
 metrics_all <- sensspec_wide |>
   left_join(ppv_npv, by = "grp") |>
-  mutate(grp = factor(grp, levels = ord_grp)) |>
+  mutate(grp = factor(grp, levels = ord)) |>
   arrange(grp) |>
   select(grp, Sensitivity, Specificity, PPV, NPV)
 
@@ -902,7 +1381,7 @@ gt::gtsave(
 
 {{< pagebreak >}}
 
-## Supplementary Table 3
+## eTable 3
 
 ```{r tbl-ppv-npv-rtt}
 #| echo: false
@@ -916,7 +1395,7 @@ dat_prog <- data_test |>
   mutate(
     truth = if_else(truth == "Progression", "Sensitivity", "Specificity"),
     truth = factor(truth, levels = c("Sensitivity","Specificity")),
-    grp   = factor(grp, levels = ord_grp)
+    grp   = factor(grp, levels = ord)
   )
 
 # Model
@@ -970,7 +1449,7 @@ dat_prog_ppvnpv <- data_test |>
     truth01 = if_else(truth == "Progression", 1, 0),            # binary gold-standard
     value   = factor(if_else(value == "Progression", "Progression", "Other"),
                      levels = c("Other","Progression")),
-    grp     = factor(grp, levels = ord_grp)
+    grp     = factor(grp, levels = ord)
   )
 
 # Model: truth01 ~ value * grp
@@ -1016,14 +1495,14 @@ ppv_npv_prog_wide <- pred_val_grp_prog |>
   select(grp, Metric, pretty) |>
   arrange(Metric, grp) |>
   pivot_wider(names_from = Metric, values_from = pretty) |>
-  arrange(factor(grp, levels = ord_grp))
+  arrange(factor(grp, levels = ord))
 
 # --------------------------
 # C) One table: rows = grp (models), cols = Sens, Spec, PPV, NPV
 # --------------------------
 metrics_prog <- sensspec_prog_wide |>
   left_join(ppv_npv_prog_wide, by = "grp") |>
-  mutate(grp = factor(grp, levels = ord_grp)) |>
+  mutate(grp = factor(grp, levels = ord)) |>
   arrange(grp) |>
   select(grp, Sensitivity, Specificity, PPV, NPV)
 
@@ -1052,154 +1531,6 @@ gt::gtsave(
 ```
 
 {{< pagebreak >}}
-
-## Supplementary Table 4
-
-```{r efficiency-human}
-#| echo: false
-#| output: false
-
-df <- logs$data
-
-# --- 2) Keep only "Update record ... (Extraction 1|2)" and drop Ground Truth / LLM1–4 ---
-clean_extractions <- df %>%
-  filter(
-    str_detect(action, regex("^Update record\\b.*\\(Extraction [12]\\)", ignore_case = TRUE)),
-    !str_detect(action, regex("\\b(Ground\\s*Truth|LLM\\s*[1-4])\\b", ignore_case = TRUE))
-  )
-
-# --- 3) Ensure timestamp is a proper datetime (so sorting is truly chronological) ---
-if (!inherits(clean_extractions$timestamp, "POSIXt")) {
-  clean_extractions <- clean_extractions %>%
-    mutate(timestamp = ymd_hms(timestamp, quiet = TRUE))
-}
-
-# --- 4) Remove the oldest 400 entries for "schwenkej", then sort by user + time ---
-clean_extractions <- clean_extractions %>%
-  group_by(username) %>%
-  arrange(timestamp, .by_group = TRUE) %>%
-  filter(!(username == "schwenkej" & row_number() <= 400)) %>%
-  ungroup() %>%
-  arrange(username, timestamp)
-
-
-# --- 5) Calculate approx time per report
-time <- clean_extractions |> 
-  group_by(username) |> 
-  arrange(username, timestamp) |> 
-  mutate(
-    prev_time = lag(timestamp),
-    gap = as.numeric(difftime(timestamp, prev_time, units = "secs")),
-    gap_imp = if_else(gap <= 5 | gap >= 300, NA_real_, gap)
-  ) |>
-  ungroup() |>
-  mutate(gap_imp = if_else(is.na(gap_imp), mean(gap_imp, na.rm = TRUE), gap_imp)) |>
-  relocate(c(prev_time, gap, gap_imp), .after = "timestamp") |>
-  summarise(
-    mean_sec = mean(gap_imp, na.rm = TRUE),
-    min_sec  = min(gap_imp,  na.rm = TRUE),
-    max_sec  = max(gap_imp,  na.rm = TRUE)
-  )
-```
-
-```{r efficiency-llm}
-#| echo: false
-#| output: false
-
-llm_eff <- read_csv(here("data", "oncology", "model_iteration_durations.csv"))
-
-# 1) Keep first two runs for gpt-oss:120b and sum them; drop other gpt-oss rows
-gpt_sum <- llm_eff |>
-  filter(model == "gpt-oss:120b") |>
-  arrange(start_time) |>
-  slice(1:2) |>                             
-  summarise(model = "gpt-oss:120b",
-            duration_secs = sum(duration_secs), .groups = "drop") |>
-  mutate(per_report_secs = duration_secs / 300)
-
-# 2) All other models: one row = one run, convert to per-report seconds
-others <- llm_eff |>
-  filter(model != "gpt-oss:120b") |>
-  mutate(per_report_secs = duration_secs / 300) |>
-  select(model, per_report_secs)
-
-# 3) Combine and summarise per model
-per_model <- bind_rows(
-  gpt_sum |> select(model, per_report_secs),
-  others
-) |>
-  group_by(model) |>
-  summarise(
-    mean_sec = mean(per_report_secs, na.rm = TRUE),
-    mean_min = mean_sec / 60,
-    .groups = "drop"
-  )
-```
-
-```{r}
-#| echo: false
-#| tbl-cap: "Mean extraction time per report by extractor group."
-# Combine human and LLM timing data
-combined_timing <- bind_rows(
-  # Human timing with range
-  time |> 
-    mutate(
-      group = "human",
-      mean_min = mean_sec / 60,
-      min_min = min_sec / 60,
-      max_min = max_sec / 60
-    ) |> 
-    select(group, mean_sec, mean_min, min_sec, max_sec, min_min, max_min),
-  
-  # LLM timing - rename and add NA for min/max
-  per_model |> 
-    rename(group = model) |> 
-    mutate(
-      min_sec = NA_real_,
-      max_sec = NA_real_,
-      min_min = NA_real_,
-      max_min = NA_real_
-    ) |>
-    select(group, mean_sec, mean_min, min_sec, max_sec, min_min, max_min)
-) |>
-  # Shorten LLM names - keep only up to parameter count
-  mutate(
-    group = case_when(
-      group == "llama3.3:70b-instruct-q5_K_M" ~ "llama3.3:70b",
-      group == "mistral-small:24b-instruct-2501-q4_K_M" ~ "mistral-small:24b",
-      TRUE ~ group
-    ),
-    group = factor(group, levels = c(
-      "human", 
-      "llama3.3:70b",
-      "mistral-small:24b", 
-      "qwen3:32b",
-      "qwq:32b",
-      "gpt-oss:120b"
-    ))
-  ) |>
-  arrange(group)
-
-# Create gt table with range for humans
-tbl_timing <- combined_timing |>
-  mutate(
-    time_display = if_else(
-      group == "human",
-      sprintf("%.1f (%.1f–%.1f)", mean_min, min_min, max_min),
-      sprintf("%.1f", mean_min)
-    )
-  ) |>
-  select(group, time_display) |>
-  gt() |>
-  cols_label(
-    group = "",
-    time_display = "Mean Time per Report (minutes)"
-  ) |>
-  cols_align(align = "center", columns = time_display) |> 
-  tab_options(data_row.padding = px(4))
-
-tbl_timing
-```
 
 ```{r mistakes-gptoss}
 #| echo: false
@@ -1287,4 +1618,673 @@ mistakes <- glm(
     family = binomial(link = "logit")
   )
 plot_predictions(mistakes, by = "report_length", type = "response", vcov = ~ier_bk)
+```
+
+# eMethods
+
+## Prompt and Pipeline Optimization
+
+### Pipeline Adaptation
+We refined prompts using the prompt-optimization set ($n=100$). Initial tests showed that for most models, asking for immediate structured output resulted in classification errors where the model's provided justification did not match the extracted value of the structured output. To address this, we adjusted the pipeline to allow a model to first answer in free-text, and in a second step in the same chat output its response in a structured format. This approach led to improvements in performance across most models.
+
+### Model-Specific Configuration (GPT-OSS:120B)
+We gained access to GPT-OSS:120B after the initial prompt optimization phase. Preliminary runs on the optimization set indicated that, unlike the other models, the multi-step reasoning pipeline worsened performance for this specific model. Consequently, we utilized a single integrated prompt for GPT-OSS:120B, where reasoning, and structured extraction were requested simultaneously.
+
+### Task-Specific Scope Assessment
+For the *Response to Treatment* and *Radiological Absence of Tumor* tasks, we identified a specific issue where models frequently classified relevant reports as "Not Applicable" (out of scope) when tasked with assessing scope and classification simultaneously. To mitigate this issue of incorrectly excluding valid reports, we split the pipeline into distinct stages (see eFigure 3). First, a dedicated prompt asked the model to determine if the report was within the scope of the clinical question. If affirmed, subsequent prompts were triggered to perform the specific data extraction and classification.
+
+### Ground Truth Validation
+To ensure the integrity of the study data, a senior oncologist (BK), blinded to the LLM predictions, reviewed all 43 reports that had been labeled as "out of scope" by the human abstractors. This review determined that 13 (30.2%) of these reports were, in fact, in scope and contained valid information for response assessment. These reports were subsequently relabeled and included in the final analysis.
+
+## Extraction Guidelines for Humans
+
+### Extraction of Primary Tumor Diagnosis
+
+-   Extract the location (organ) of the primary tumor from the imaging exam report.
+
+-   Often the primary location is directly mentioned in the 'Anamnese' section of the report. The primary location of the tumor and its name in the 'Anamnese' section can be treated as the same thing.
+
+-   It is possible that the primary location of the tumor is unclear or not mentioned, but we know location of metastases. In that case choose 'Unclear'. • Do not use the location of metastasis to make a guess about the location of the primary tumor.
+
+-   Choose 'Not Applicable' if the the clinical context/findings clearly indicate the scan was performed for reasons unrelated to the cancer.
+
+-   If the patient has two tumor simultaneously, choose the tumor that is mentioned first in the report.
+
+### Extraction of Metastasis Presence
+
+You will be given a report of the imaging exam of the of a patient with cancer. You are asked to extract whether this patient presently has metastasis in the imaged are as mentioned in the report.
+
+Please answer for each questions displayed below:
+
+**Interpreting PET-CT Findings:**
+
+-   Pay close attention to descriptions of lesions, particularly those identified as 'hypermetabolic', 'FDG-avid', having 'increased uptake', or showing a specific 'SUV' (Standardized Uptake Value). These indicate metabolic activity often associated with cancer but require careful interpretation within the report's context.
+
+-   Radiologists may use terms like 'lesion', 'nodule', 'mass', 'uptake', or 'activity' instead of explicitly stating 'metastasis'. Your task is to determine if the description and context imply metastatic disease.
+
+**Interpreting CT and MRI-Findings:**
+
+-   Identify if the radiologist explicitly labels any finding as 'Metastase', 'metastasenverdächtig', or similar.
+
+-   Assess if the radiologist describes lesions/nodules/masses with characteristics and then explicitly states they are suspicious for, concerning for, consistent with, likely, or typical of metastasis.
+
+-   Note if the radiologist offers a differential diagnosis; the likelihood assigned to metastasis is key (see TRUE/FALSE criteria).
+
+**Answering TRUE/FALSE:**
+
+-   Answer with TRUE if there is:
+
+-   A clear mention of metastasis in the specific location.
+
+-   A description of a lesion where the radiologist expresses a strong suspicion or high likelihood of it representing metastasis (e.g., 'metastasenverdächtig', 'concerning for metastatic deposit', 'vereinbar mit Metastasierung', 'wahrscheinliche Metastasen').
+
+-   Answer with FALSE if:
+
+    -   Metastasis is mentioned but considered less likely than other possibilities (e.g., listed lower in the differential diagnosis: 'DD inflammation DD metastasis' -\> FALSE; 'likely inflammatory' -\> FALSE).
+
+    -   A hypermetabolic finding is clearly attributed to a non-malignant cause (e.g., inflammation, infection, post-surgical changes, physiological uptake).
+
+    -   There is no mention of findings suspicious for metastasis in that location.
+
+    -   The report explicitly states the lesion is unlikely to be metastasis.
+
+    -   **Do not consider any information about metastasis, which is from the case history ('Anamnese'). E.g., it might be mentioned that the patient has a metastasis of an organ that is not part of the current imaging exam. Do NOT consider this information. Only focus on what is seen in the current imaging exam.**
+
+**Distinguishing Primary Tumor vs. Metastasis:**
+
+-   Progression, recurrence, or residual disease of the known primary tumor at its original site is NOT metastasis for the purpose of this task.
+
+-   A hypermetabolic focus at the site of the known primary tumor should generally be considered related to the primary, UNLESS the report explicitly suggests it represents a metastatic deposit separate from the main primary mass or indicates metastatic spread within the same organ but distinct from the primary focus.
+
+-   If the radiologist describes only the primary tumor location and its characteristics (even if hypermetabolic), do NOT label this as a metastatic location.
+
+-   Keep in mind that progression of a primary tumor in this region is NOT a metastasis.
+
+-   The lesion of the primary tumour is NOT a metastasis. Pay attention to whether the radiologist labels the lesion as a metastasis or as the primary tumour.
+
+-   If the radiologist describes the location of the primary tumour only, do NOT use this as a location for metastasis, unless the patient has metastasis in the same location as the primary tumour.
+
+### Extraction of Response to Treatment
+
+**1. Guiding Principles**
+
+This guide classifies radiology reports based on cancer treatment response. The core logic depends on the dynamic described in the report's comparison to a prior scan: is the overall tumor burden shrinking, stable, or growing?
+
+-   **RESPONSE (R):** The direct result of successful treatment. The report describes the **elimination (Complete Response)** or **significant reduction (Partial Response)** of tumor burden, OR it **confirms the continued absence of disease** after a prior complete response.
+
+-   **STABLE DISEASE (SD):** A state of equilibrium. This applies **only when a measurable tumor is present** and the report describes it as not having significantly changed in size *since the last scan*.
+
+-   **PROGRESSION (PD):** The cancer is growing. The report describes that existing tumors are bigger or, critically, that new tumors have appeared.
+
+-   **NOT APPLICABLE (NA):** The scan is not for treatment follow-up.
+
+**If the radiologist uses 'RESPONSE', 'STABLE DISEASE', 'PROGRESSION' according to criteria like RECIST or RANO, always extract the radiologists conclusion directly**.
+
+**2. Classification Criteria**
+
+RESPONSE (R - Ansprechen / Remission)
+
+-   **Definition:** The report documents a positive effect of treatment by describing a clear reduction or elimination of tumor burden, or the continued absence of disease, *compared to the immediate previous examination*.
+
+-   **Applies When:**
+
+    -   **Complete Response:** The report states that all known tumors have disappeared.
+
+    -   **Partial Response:** The report states that known tumors have significantly decreased in size.
+
+    -   **Continued Remission:** The report confirms that a patient who previously achieved a Complete Response remains free of disease.
+
+    -   **Post-Surgical/Interventional:** The report is the first one after a major intervention (like surgery) and documents the successful removal or reduction of a tumor, even if other tumors remain.
+
+-   **Key Conditions:** No new cancerous lesions are described.
+
+-   **Look For (Keywords):** 'komplette/partielle Remission', 'deutliche Größenabnahme', 'signifikante Regredienz', 'gutes Ansprechen', 'kein Tumornachweis mehr', 'Zustand nach Resektion', 'kein Anhalt für Rezidiv'.
+
+STABLE DISEASE (SD - Stabile Erkrankung)
+
+-   **Definition:** The report documents that a **known, measurable tumor is not changing significantly** *compared to the immediate previous examination*.
+
+-   **Applies When**
+
+    -   The report describes the size of existing tumor(s) as unchanged since the last scan.
+
+    -   The report describes a tumor as stable compared to the last scan, even if the clinical history mentions it was much larger in the distant past (e.g., a tumor shrank from 5cm to 2cm months ago, and is now described as 'stable at 2cm'). The stability is the most recent event.
+
+-   **Key Conditions:** No new cancerous lesions are described. The patient must have measurable disease.
+
+-   **Look For (Keywords):** 'stabile Erkrankung', 'unveränderter Befund', 'konstante Läsionsgröße', 'Befundstabilität', 'keine wesentliche Dynamik'.
+
+PROGRESSION (PD - Progrediente Erkrankung)
+
+-   **Definition:** The report documents an overall increase in tumor burden.
+
+-   **Applies When:**
+
+    -   The report states that existing tumors have significantly **increased in size.**
+
+    -   **The report mentions that one or more new cancerous lesions have appeared.**
+
+-   **Key Conditions:** The appearance of new lesions signifies PROGRESSION, even if other tumors are stable or shrinking.
+
+-   **Look For (Keywords):** 'progrediente Erkrankung', 'Progression', 'Größenzunahme', 'Befundverschlechterung', and especially: **'neue Läsionen'**, **'neu aufgetretene Metastasen'**.
+
+NOT APPLICABLE (NA)
+
+-   **Definition:** The scan cannot be used to assess treatment response.
+
+-   **Applies When:** It is a baseline/staging scan (Erststaging), no prior scan is available for comparison (keine Voruntersuchung), or the clinical question is unrelated to cancer follow-up.
+
+**3. Examples for Classification**
+
+Use these self-contained examples to guide classification logic.
+
+**Example 1**
+
+-   **SCENARIO:** A patient undergoes chemotherapy for multiple lung metastases.
+
+-   **REPORT FINDING:** "Compared to the prior study, all previously described lung metastases have resolved."
+
+-   **CLASSIFICATION:** RESPONSE
+
+-   **REASONING:** The report describes the complete disappearance of the tumor, which is a Complete Response.
+
+**Example 2**
+
+-   **SCENARIO:** A patient who previously had a complete response has a routine 6-month follow-up scan.
+
+-   **REPORT FINDING:** "No evidence of tumor recurrence. Post-operative changes are stable compared to the prior examination."
+
+-   **CLASSIFICATION:** RESPONSE
+
+-   **REASONING:** The key finding is the continued absence of disease. It cannot be Stable Disease because there is no measurable tumor. This confirms a continued state of remission.
+
+**Example 3**
+
+-   **SCENARIO:** A patient is being treated for a 5 cm liver metastasis.
+
+-   **REPORT FINDING:** "The known liver metastasis has decreased in size and now measures 2 cm in diameter. This represents a partial response to therapy."
+
+-   **CLASSIFICATION:** RESPONSE
+
+-   **REASONING:** The report explicitly describes a significant reduction in tumor size.
+
+**Example 4**
+
+-   **SCENARIO:** A patient who previously had a partial response (tumor shrank to 2 cm) has a follow-up scan 3 months later.
+
+-   **REPORT FINDING:** "The 2 cm liver metastasis is unchanged in size compared to the study from 3 months ago."
+
+-   **CLASSIFICATION:** STABLE DISEASE
+
+-   **REASONING:** The most recent event described is stability. The classification is based on the finding in the most recent interval, not the entire treatment history.
+
+**Example 5**
+
+-   **SCENARIO:** A patient with a primary tumor and a single metastasis undergoes surgery to remove the primary tumor. This is the first scan after the operation.
+
+-   **REPORT FINDING:** "Status post-resection of the primary tumor in the colon. The known liver metastasis is unchanged."
+
+-   **CLASSIFICATION:** RESPONSE
+
+-   **REASONING:** The scan documents the result of the major therapeutic intervention (surgery), which successfully removed a large part of the tumor burden.
+
+**Example 6**
+
+-   **SCENARIO:** A patient from the previous example has another follow-up scan 6 months later.
+
+-   **REPORT FINDING:** "The known liver metastasis remains stable in size compared to the prior post-operative scan. No new lesions are seen."
+
+-   **CLASSIFICATION:** STABLE DISEASE
+
+-   **REASONING:** The focus is now on the dynamic of the remaining, measurable tumor. Since it is unchanged, the current state is stable.
+
+**Example 7**
+
+-   **SCENARIO:** A patient is on active treatment for known lesions.
+
+-   **REPORT FINDING:** "The known liver lesions are stable, but a new 1 cm lesion is now visible in the spleen, suspicious for a metastasis."
+
+-   **CLASSIFICATION:** PROGRESSION
+
+-   **REASONING:** The appearance of a new lesion is the strongest indicator of progression and overrides stability elsewhere.
+
+**Example 8**
+
+-   **SCENARIO:** A patient is on active treatment for known lesions in the liver and spleen.
+
+-   **REPORT FINDING:** "The known liver lesions have decreased in size, but the lesion of the spleen has significantly increased in size."
+
+-   **CLASSIFICATION:** PROGRESSION
+
+-   **REASONING:** The growth of an existing lesion overrides decrease elsewhere.
+
+**Example 9**
+
+-   **SCENARIO:** A patient with astrocytoma had resection of the primary tumor and has a post-op scan.
+
+-   **REPORT FINDING:** "No evidence for tumor-lesions. 'Stable Disease' according to RANO criteria."
+
+-   **CLASSIFICATION:** STABLE DISEASE
+
+-   **REASONING:** The key finding is the classification of the radiologist as stable disease. This overrides anything else. 
+
+**4. Final Rules & Prioritization**
+
+1.  **If the radiologist makes a clear classification, this is king and should be extracted.**
+
+2.  The appearance of a **new lesion characterized as likely malignant** is the strongest signal for PROGRESSION. If the radiologist suggests a non-malignant cause (e.g., infection, inflammation) as more likely, it should not be classified as progression based on that finding alone.
+
+3.  **No Tumor ≠ Stable Disease:** A state of "no detectable tumor" is RESPONSE, UNLESS the radiologist explicitly categorizes the finding as STABLE DISEASE.
+
+4.  **Focus on the Most Recent Change:** The classification must reflect the dynamic described in the current report (e.g., 'stable compared to last scan,' 'shrinking since last scan'). The primary classification comes from the most recent interval change.
+
+### Extraction of Radiological Absence of Tumor
+
+-   If you have chosen COMPLETE_RESPONSE or NOT_APPLICABLE for PET-CT or RESPONSE or NOT_APPLICABLE for non-PET imaging also indicate whether the patient is completely tumor free, in other words, there is no evidence of any tumor ('Kein Tumornachweis'). 
+
+-   If you have chosen PARTIAL_RESPONSE or STABLE_DISEASE or PROGRESSION always answer with false.
+
+-   If you chose COMPLETE_RESPONSE based on metabolic finding, always choose yes.
+
+-   If the imaging exam failed for any reason, answer with yes.
+
+-   Do not consider any information about metastasis, which is from the case history ('Anamnese'). Only focus on what is seen in the current imaging exam.
+
+## Prompts
+
+These are prompts used in the classiciations pipelines. The prompts are better understood in the conext of the code. We encourage the reader to examine the code together with the prompts here [placeholder]!!!!!!
+
+### Metastasis Classification
+
+#### System Prompt
+
+```         
+You are a highly trained medical AI assistant helping users to extract the location of metastases from radiology reports.
+```
+
+#### Prompts 1-19
+
+This template contains the instructions common to all functions. Placeholders {region_name} and {metastasis_questions} are dynamically replaced based on the specific body region(s) being evaluated.:
+
+```         
+**ROLE INSTRUCTIONS:** 
+“Assume you are a trained and experienced radiologist analyzing imaging scans (CT, MRI, X-Ray, or CT/PET) from cancer patients.
+You will be given a report of the imaging exam of the {region_name} region(s) of a patient.
+You are asked to extract whether this patient presently has metastasis mentioned in the report.
+Please answer for each of the following separately:
+
+{metastasis_questions}
+
+**GENERAL:** 
+Interpreting PET-CT Findings:
+
+- Pay close attention to descriptions of lesions, particularly those identified as 'hypermetabolic', 'FDG-avid', having 'increased uptake', or showing a specific 'SUV' (Standardized Uptake Value). These indicate metabolic activity often associated with cancer but require careful interpretation within the report's context.
+
+- Radiologists may use terms like 'lesion', 'nodule', 'mass', 'uptake', or 'activity' instead of explicitly stating 'metastasis'. Your task is to determine if the description and context imply metastatic disease.
+
+Interpreting CT and MRI-Findings:
+
+- Identify if the radiologist explicitly labels any finding as 'Metastaste','metastasenverdächtig', or similar.
+
+- Assess if the radiologist describes lesions/nodules/masses with characteristics and then explicitly states they are suspicious for, concerning for, consistent with, likely, or typical of metastasis.
+
+- Note if the radiologist offers a differential diagnosis; the likelihood assigned to metastasis is key (see TRUE/FALSE criteria).
+
+**ANSWERING TRUE/FALSE:**
+Answer with TRUE if there is:
+
+- A clear mention of metastasis in the specific location.
+
+- A description of a lesion where the radiologist expresses a *strong suspicion* or high likelihood of it representing metastasis (e.g., 'metastasenverdächtig', 'concerning for metastatic deposit', 'vereinbar mit Metastasierung', 'wahrscheinliche Metastasen').
+
+Answer with FALSE if:
+
+- Metastasis is mentioned but considered *less likely* than other possibilities (e.g., listed lower        in the differential diagnosis: 'DD inflammation DD metastasis' -> FALSE; 'likely inflammatory' -> FALSE).
+
+- A hypermetabolic finding is clearly attributed to a non-malignant cause (e.g., inflammation, infection, post-surgical changes, physiological uptake).
+
+- There is no mention of findings suspicious for metastasis in that location.
+
+- The report explicitly states the lesion is *unlikely* to be metastasis
+
+- Do not consider any information about metastasis, which is from the case history ('Anamnese'). E.g., it might be mentioned that the patient has a metastasis of an organ that is not part of the current imaging exam. Do NOT consider this information. Only focus on what is seen in the current imaging exam.
+
+**DISTINGUISHING PRIMARY TUMOR VS. METASTASIS:**
+
+- Progression, recurrence, or residual disease of the known primary tumor at its original site is NOT metastasis for the purpose of this task.
+
+- A hypermetabolic focus at the site of the known primary tumor should generally be considered related to the primary, UNLESS the report explicitly suggests it represents a metastatic deposit separate from the main primary mass or indicates metastatic spread within the same organ but distinct from the primary focus.
+
+- If the radiologist describes only the primary tumor location and its characteristics (even if hypermetabolic), do NOT label this as a metastatic location.
+
+- Keep in mind that progression of a primary tumor in this region is NOT a metastasis.
+
+- The lesion of the primary tumour is NOT a metastasis. Pay attention to whether the radiologist labels the lesion as a metastasis or as the primary tumour.
+
+- If the radiologist describes the location of the primary tumour only, do NOT use this as a location for metastasis, unless the patient has metastasis in the same location as the primary tumour:
+
+The imaging report text is below this line:
+
+-------------------------------------------
+
+{text_placeholder}
+```
+
+P1-19. Depending on {region_name}, only some of {metastasis_questions} will be asked. Each is answered true or false.
+
+```         
+.Q_CNS <- "This patient has metastasis of the brain parenchyma."
+.Q_MENINGEAL <- "This patient has meningeal metastasis."
+.Q_BONE <- "This patient has bone metastasis."
+.Q_LYMPH <- "This patient has lymph node metastasis."
+.Q_SOFT_TISSUE <- "This patient has soft tissue metastasis."
+.Q_LIVER <- "This patient has liver metastasis."
+.Q_ADRENAL <- "This patient has adrenal metastasis."
+.Q_KIDNEY <- "This patient has kidney metastasis."
+.Q_SPLEEN <- "This patient has spleen metastasis."
+.Q_PANCREAS <- "This patient has pancreatic metastasis."
+.Q_PERITONEAL <- "This patient has peritoneal metastasis."
+.Q_OVARIAN <- "This patient has ovarian metastasis."
+.Q_LUNG <- "This patient has lung metastasis."
+.Q_PLEURA <- "This patient has pleural metastasis."
+.Q_OTHER_ORGAN <- "This patient has metastasis in any organ mentioned."
+.Q_JUSTIFICATION <- "Provide justification based only on the text."
+```
+
+Output example JSON only for thorax region:
+
+```         
+{
+
+"lung_metastasis": true,
+
+"pleural_metastasis": false,
+
+"lymph_node_metastasis": true,
+
+"bone_metastasis": false,
+
+"soft_tissue_metastasis": false,
+
+"justification": "Multiple pulmonary nodules ‘suspicious for metastases’ and enlarged mediastinal nodes ‘concerning for metastatic disease’; no pleural deposits described."
+
+}
+```
+
+### Response to Treatment Classification
+
+System Prompt
+
+```         
+You are a highly trained medical AI assistant helping users to extract information on treatment response from radiology reports.
+```
+
+(Step 1) Prompt assessing whether report is in-scope.
+
+```         
+Analyze the provided German imaging report text and determine if its primary purpose is to assess response to a treatment of the cancer (i.e., a follow-up after treatment, surveillance after remission, or response assessment scan).
+INPUT: Full text of a German imaging report.
+OUTPUT: Classify the report's purpose into ONE of the following two categories:
+1.  `IN_SCOPE`: The report is a follow-up, monitoring, or treatment response assessment scan. If the patient was treated in the past and we are interested in remission or relapse, this is also in scope.
+2.  `OUT_OF_SCOPE`: The report is for an initial diagnosis or initial staging (`Baselinestaging`), the exam didn't take place, the scan was done to rule out infection or anything else unrelated, or the scan was clearly done before any anti-cancer treatment including surgery was begun. 
+Below this line starts the radiology report:
+---------------------------------------
+```
+
+If RANO or RECIST classification was used in the report (Step 2 == YES).
+
+```         
+You are given a german radiology report for a cancer patient. Response to treatment was classified using RANO or RECIST. Extract ad verbatim the sentence in which the radiologist does the OVERALL reponse classification (Gesamtauswertung) according to RANO or RECIST.
+Below this line starts the radiology report:
+---------------------------------------
+```
+
+If the report is from a PET scan (Setp 3 == YES).
+
+```         
+Now map verbatim response to one PET-CT metabolic response category.
+Must be one of: ['COMPLETE_RESPONSE','PARTIAL_RESPONSE','STABLE_DISEASE','PROGRESSION']
+MAPPING HINTS:
+- 'Complete Response', 'Komplette Remission' -> COMPLETE_RESPONSE
+- 'Partial Response', 'Partielle Remission' -> PARTIAL_RESPONSE
+- 'Stable Disease', 'Stabile Erkrankung'     -> STABLE_DISEASE
+- 'Progression', 'Progrediente Erkrankung'   -> PROGRESSION
+Additionally, determine if the patient is completely tumour free.
+- Set `no_tumor` to `TRUE` ONLY IF your classification is `COMPLETE_RESPONSE` AND the full report text (from the previous turn) indicates the patient is completely tumour free ('Kein Tumornachweis').
+- Set `no_tumor` to `FALSE` in all other cases.
+```
+
+If the report is not from a PET scan (Step 3 == No).
+
+```         
+Now map the verbatim response to one OVERALL response category.
+Must be one of: ['RESPONSE','STABLE_DISEASE','PROGRESSION'].
+MAPPING HINTS:
+- 'Complete Response', 'Komplette Remission' -> RESPONSE
+- 'Partial Response', 'Partielle Remission' -> RESPONSE
+- 'Stable Disease', 'Stabile Erkrankung'     -> STABLE_DISEASE
+- 'Progression', 'Progrediente Erkrankung'   -> PROGRESSION   
+Additionally, determine if the patient is completely tumour free.
+- Set `no_tumor` to `TRUE` ONLY IF your classification is `RESPONSE` AND the full report text (from the previous turn) indicates the patient is completely tumour free ('Kein Tumornachweis').
+- Set `no_tumor` to `FALSE` in all other cases.
+```
+
+If RANO or RECIST classification was not used in the report (Step 2 == NO) and the report is a PET scan (Step 3 == YES).
+
+First task: Analyze & extract text without structured reponse. Second task: Map to pre-specified classification. Third task: Answering tumor free? TRUE/FALSE
+
+```         
+<first task>
+Analyze the provided German PET-CT report text and classify the patient's cancer status based strictly on described changes in metabolic activity (FDG uptake).Ignore changes in size (CT findings) unless metabolic information is entirely absent.
+
+INPUT: Full text of a German PET-CT report.
+OUTPUT: Classify the report into ONE of the following categories:
+1.  `COMPLETE_RESPONSE`
+2.  `PARTIAL_RESPONSE`
+3.  `STABLE_DISEASE`
+4.  `PROGRESSION`
+CLASSIFICATION CRITERIA (Focus ONLY on Metabolic Activity):
+1.  `COMPLETE_RESPONSE` (CR - Komplette Metabolische Remission):
+General: Report indicates *complete resolution* of abnormal metabolic activity in all known lesions, down to background levels. No FDG-avid malignant lesions remain.
+Solid Tumors: Look for terms explicitly stating complete metabolic response (e.g., 'komplette metabolische Remission,' 'kein pathologischer Hypermetabolismus mehr nachweisbar,' 'vollständige Normalisierung des Stoffwechsels'). This also includes COMPLETE surgical resection of the tumour and, if existing, its metastases.
+Lymphoma/Blood Cancer: Look for'Deauville Score 1,' 'Deauville Score 2,' or 'Deauville Score 3' as the final assessment for all originally involved sites, AND absence of new FDG-avid lesions. Terms like 'komplette metabolische Remission.'
+Note: Residual non-avid findings on CT do not preclude CR.
+2.  `PARTIAL_RESPONSE` (PR - Partielle Metabolische Remission):
+General: Report indicates a significant decrease in metabolic activity (FDG uptake/SUV) in known lesions compared to the prior scan, but some residual abnormal uptake persists (above background levels).
+Solid Tumors: Look for terms indicating partial metabolic response (e.g., 'partielle metabolische Remission,' 'deutliche Abnahme/Reduktion der Stoffwechselaktivität/des SUV,' 'deutliche Regredienz des Hypermetabolismus,' but not complete resolution). This also includes INcomplete surgical resection of the tumour or its metastases.
+Lymphoma/Blood Cancer: May be indicated by a shift to a lower Deauville Score (e.g., from 5 to 4), or descriptions like 'deutliche Abnahme der metabolischen Aktivität' but uptake still clearly above background/liver (i.e., still DS 4 or 5 but improved).Use this category if response is clear but doesn't meet CMR criteria (DS 1-3).
+Note: Significant metabolic decrease defines PMR, even if size is stable or slightly increased.
+3.  `STABLE_DISEASE` (SD - Stabile Metabolische Erkrankung):
+General: Report indicates no significant change (neither significant decrease nor increase) in metabolic activity (FDG uptake/SUV values) in known lesions compared to the prior scan.
+Solid Tumors: Look for terms like 'stabile metabolische Aktivität,' 'unveränderter SUV,' 'keine signifikante Änderung des Hypermetabolismus,' 'stabiler Befund.'
+Lymphoma/Blood Cancer:Often indicated by a persistent 'Deauville Score 4' or 'Deauville Score 5' without mention of significant change compared to prior or new lesions. Look for terms like 'persistierende metabolische Aktivität', 'stabile Erkrankung.'
+4.  `PROGRESSION` (PD - Progrediente Metabolische Erkrankung):
+General: Report indicates a significant *increase* in metabolic activity (FDG uptake/SUV) in existing lesions OR, critically, the appearance of new FDG-avid lesions consistent with malignancy.
+Solid Tumors: Look for terms indicating metabolic progression (e.g., 'metabolische Progression,' 'Zunahme der Stoffwechselaktivität/des SUV,' 'progredienter Hypermetabolismus'). Crucially, look for 'neue Herde,' 'neue Läsionen,' 'neue stoffwechselaktive Läsionen.'
+Lymphoma/Blood Cancer: Look for 'Deauville Score 4' or 'Deauville Score 5' with context indicating worsening compared to prior scan, OR any mention of 'neue FDG-avide Läsionen,' 'neue Herde'(often implicitly DS 5). Also terms like 'Progression,' 'progrediente Erkrankung. '
+Note: New metabolically active lesions automatically mean `PROGRESSION`. Increased metabolic activity in existing lesions also means `PROGRESSION`, even if size decreases.
+PRIORITIZATION:
+-   Metabolic findings (PET) override anatomical findings (CT).
+-   The 'Beurteilung' (Impression/Conclusion) section often contains the final summary but verify against the 'Befund' (Findings) and 'Vergleich' (Comparison) sections.
+-   The presence of new, metabolically active lesions consistent with malignancy is the strongest indicator for `PROGRESSION`.
+-   Explicit mention of Deauville Scores (for lymphoma) is a primary classification driver. Distinguish carefully between DS 1-3 (CMR), and DS 4/5 (can be PMR, SMD, or PMD depending on comparison/new lesions).
+Below this line starts the radiology report:
+  ---------------------------------------
+</first task>
+```
+
+```         
+<second task>
+Now please map your final decision to the following STRUCTURE and return ONLY the structured object:
+- response_to_trt_pet: one of['COMPLETE_RESPONSE','PARTIAL_RESPONSE','STABLE_DISEASE','PROGRESSION']
+- justification: short 1-2 sentence rationale.
+</second task>
+<third task>
+If you have chosen `COMPLETE_RESPONSE` you are also asked to indicate whether the patient is completely tumour free, in other words, there is no evidence of any tumour ('Kein Tumornachweis').
+If you have chosen `PARTIAL_RESPONSE` or `STABLE_DISEASE` or `PROGRESSION` always answer with false.
+OUTPUT: no_tumor: TRUE / FALSE
+</third task>
+```
+
+If RANO or RECIST classification was not used in the report (Step 2 == NO) and the report is not a PET scan (Step 3 == No).
+
+```         
+<first task>
+Analyze the provided German CT or MRI report text and classify the patient's cancer status.
+INPUT: Full text of a German CT or MRI report.
+OUTPUT: Classify the report into ONE of the following categories:
+1.  `RESPONSE`
+2.  `STABLE_DISEASE`
+3.  `PROGRESSION`
+GUIDING PRINCIPLES
+The core logic depends on the dynamic described in the report's comparison to a prior scan: is the overall tumor burden shrinking, stable, or growing?
+RESPONSE (R): The direct result of successful treatment. The report describes the elimination (Complete Response) or significant reduction (Partial Response) of tumor burden, OR it confirms the continued absence of disease after a prior complete response.
+STABLE DISEASE (SD): A state of equilibrium. This applies only when a measurable tumor is present and the report describes it as not having significantly changed in size since the last scan.
+PROGRESSION (PD): The cancer is growing. The report describes that existing tumors are bigger or, critically, that new tumors have appeared.
+CLASSIFCATION CRITERIA
+1.`RESPONSE` (R - Ansprechen / Remission):
+General: Report indicates either complete disappearance of all known/target lesions OR a significant decrease in the size (e.g., diameter, volume) of known/target lesions compared to the prior scan. No new lesions are present, and no unequivocal progression of non-target lesions. This category covers both complete and substantial partial responses. A scan performed to confirm the outcome of a recent surgery that successfully removed all visible disease is also classified as RESPONSE for that event.
+Look For: Terms explicitly stating complete or partial response, or significant size reduction/disappearance (e.g., 'komplette Remission,' 'partielle Remission,' 'deutliche Größenabnahme der Läsionen,' 'signifikante Regredienz,' 'vollständige Rückbildung aller Läsionen,' 'kein Tumornachweis mehr,' 'Läsionen nicht mehr abgrenzbar/nachweisbar,' 'vollständige narbige Ausheilung,' 'größenregredient,' 'deutliche Verkleinerung,' 'gutes Ansprechen'). Comparison to a previous scan must confirm disappearance or significant reduction.
+2. `STABLE_DISEASE` (SD - Stabile Erkrankung):
+General: Report indicates no significant change (neither sufficient reduction for `RESPONSE` nor sufficient increase/new lesions for `PROGRESSION`) in the size or characteristics of known lesions compared to the prior scan.
+Look For: Terms like 'stabile Erkrankung,' 'unveränderter Befund,' 'konstante Läsionsgröße,' 'keine signifikante Größenänderung,' 'Befundstabilität,' 'keine wesentliche Dynamik.'
+3.  `PROGRESSION` (PD - Progrediente Erkrankung / Progression):
+General: Report indicates a significant increase in the size of existing lesions, OR, critically, the appearance of new lesions consistent with malignancy, OR unequivocal progression of non-target lesions.
+Look For: Terms indicating progression (e.g., 'progrediente Erkrankung,' 'Progression,' 'Größenzunahme der Läsionen,' 'Befundverschlechterung,' 'größenprogredient').
+Crucially, look for any mention of 'neue Läsionen,' 'neue Herde,' 'neu aufgetretene Metastasen/Filiae,' 'neu abgrenzbare Läsionen.' The appearance of new lesions typically signifies progression regardless of the behavior of previously known lesions. The identification of a recurrence (e.g., 'Rezidiv', 'Tumorrezidiv', 'Lokalrezidiv') after a period of remission or after surgical resection is a definitive sign of progression.
+EXAMPLES FOR CLASSIFICATION
+Use these self-contained examples to guide classification logic.
+Example 1
+SCENARIO: A patient undergoes chemotherapy for multiple lung metastases.
+REPORT FINDING: 'Compared to the prior study, all previously described lung metastases have resolved.'
+CLASSIFICATION: RESPONSE
+REASONING: The report describes the complete disappearance of the tumor, which is a Complete Response.
+Example 2
+SCENARIO: A patient who previously had a complete response has a routine 6-month follow-up scan.
+REPORT FINDING: 'No evidence of tumor recurrence. Post-operative changes are stable compared to the prior examination.'
+CLASSIFICATION: RESPONSE
+REASONING: The key finding is the continued absence of disease. It cannot be Stable Disease because there is no measurable tumor. This confirms a continued state of remission.
+Example 3
+SCENARIO: A patient is being treated for a 5 cm liver metastasis.
+REPORT FINDING: 'The known liver metastasis has decreased in size and now measures 2 cm in diameter. This represents a partial response to therapy.'
+CLASSIFICATION: RESPONSE
+REASONING: The report explicitly describes a significant reduction in tumor size.
+Example 4
+SCENARIO: A patient who previously had a partial response (tumor shrank to 2 cm) has a follow-up scan 3 months later.
+REPORT FINDING: 'The 2 cm liver metastasis is unchanged in size compared to the study from 3 months ago.'
+CLASSIFICATION: STABLE DISEASE
+REASONING: The most recent event described is stability. The classification is based on the finding in the most recent interval, not the entire treatment history.
+Example 5
+SCENARIO: A patient with a primary tumor and a single metastasis undergoes surgery to remove the primary tumor. This is the first scan after the operation.
+REPORT FINDING: 'Status post-resection of the primary tumor in the colon. The known liver metastasis is unchanged.'
+CLASSIFICATION: RESPONSE
+REASONING: The scan documents the result of the major therapeutic intervention (surgery), which successfully removed a large part of the tumor burden.
+Example 6
+SCENARIO: A patient from the previous example has another follow-up scan 6 months later.
+REPORT FINDING: 'The known liver metastasis remains stable in size compared to the prior post-operative scan. No new lesions are seen.'
+CLASSIFICATION: STABLE DISEASE
+REASONING: The focus is now on the dynamic of the remaining, measurable tumor. Since it is unchanged, the current state is stable.
+Example 7
+SCENARIO: A patient is on active treatment for known lesions.
+REPORT FINDING: 'The known liver lesions are stable, but a new 1 cm lesion is now visible in the spleen, suspicious for a metastasis.'
+CLASSIFICATION: PROGRESSION
+REASONING: The appearance of a new lesion is the strongest indicator of progression and overrides stability elsewhere.
+Example 8
+SCENARIO: A patient is on active treatment for known lesions in the liver and spleen.
+REPORT FINDING: 'The known liver lesions have decreased in size, but the lesion of the spleen has significantly increased in size.'
+CLASSIFICATION: PROGRESSION
+REASONING: The growth of an existing lesion overrides decreases elsewhere.
+Example 9
+SCENARIO: A patient with astrocytoma had resection of the primary tumor and has a post-op scan.
+REPORT FINDING: 'No evidence for tumor-lesions.'
+CLASSIFICATION: STABLE DISEASE
+REASONING: The key finding is the classification of the radiologist as stable disease. This overrides anything else.
+FINAL RULES
+-   Prioritize Overriding Information: Pay close attention to the entire report, including addenda, corrections, or later findings (e.g., 'Zusatzbefund', 'Nachtrag', 'Korrigendum'). Information in these sections may provide critical context that overrides or re-interprets the main assessment. The final classification must be based on the most complete and final context provided.
+-   The appearance of a new lesion characterized as likely malignant is a strong signal for PROGRESSION.
+-   If the radiologist suggests a non-malignant cause (e.g., infection, inflammation) as more likely, it should not be classified as progression based on that finding alone.
+-   No Tumor ≠ Stable Disease: A state of 'no detectable tumor' is RESPONSE, UNLESS the radiologist explicitly categorizes the finding as STABLE DISEASE.
+-   Focus on the Most Recent Change: The classification must reflect the dynamic described in the current report (e.g., 'stable compared to last scan,' 'shrinking since last scan'). The primary classification comes from the most recent interval change.
+Below this line starts the radiology report:
+  ---------------------------------------
+</first task>
+```
+
+Prompt for structured output
+
+```         
+<second task>
+Now please map your final decision to the following STRUCTURE and return ONLY the structured object - extract_treatment_response_non_pet: one of ['RESPONSE','STABLE_DISEASE','PROGRESSION']
+- justification: short 1-2 sentence rationale.
+</second task>
+<third task>
+If you have chosen `RESPONSE` you are also asked to indicate whether the patient is completely tumour free, in other words, there is no evidence of any tumour ('Kein Tumornachweis').
+If you have chosen `STABLE_DISEASE` or `PROGRESSION` always answer with false.
+OUTPUT: no_tumor: TRUE / FALSE
+</third task>
+```
+
+### Diagnosis Classification
+
+System prompt
+
+```         
+"You are a highly trained medical AI assistant helping users to match free text diagnoses to a list of diagnose categories provided by the user."
+```
+
+Free text extraction prompt
+
+```         
+Please extract the first oncology diagnosis from the <Anamnese> section of the following german radiology report ad verbatim. Don't extract anything else.
+The imaging report text is below this line:
+-------------------------------------------
+{text_placeholder}
+```
+
+Prompt for structured output
+
+```
+Your task is to read the provided medical text, which is a free text diagnosis from an Electronic Health Record (EHR).
+The input text will most likely be in German. Identify the primary diagnosis from the text.
+
+Assign the free text diagnosis to the best matching diagnosis category from the following list:
+
+"Primary Brain Tumor",
+"Head and Neck Tumors",
+"Thyroid Cancer",
+"Lung Tumor (including Mesothelioma)",
+"Breast Cancer",
+"Gastric Cancer",
+"Esophageal Cancer",
+"Pancreatic Cancer",
+"Cholangiocarcinoma",
+"Hepatocellular Carcinoma",
+"Small Bowel Cancer",
+"Colorectal Cancer",
+"Kidney Tumor",
+"Cancer of the Urinary Tract (including Ureter and Bladder)",
+"Prostate Cancer",
+"Gynecological Tumors",
+"Primary Skin Tumor (including Melanoma and Non-Melanoma)",
+"Sarcoma",
+"Lymphoma",
+"Multiple Myeloma",
+"Leukemia",
+"Neuroendocrine Tumors",
+"Testicular Cancer",
+"Cancer of Unkown Primary",
+"Other",
+"Unclear",
+"No Malignant Disease",
+"Not Applicable"
+
+Choose 'Unclear' if the diagnosis is uncertain or not clearly stated.
+Choose 'No Malignant Disease' if the text indicates no malignancy.
+Prioritize the most specific diagnosis mentioned in the text.
+If the diagnosis is not clear and multiple differential diagnoses are listed (often abbrevaited with 'DD') choose the first differential diagnosis listed.
+
+Always provide the best matching category from the list only and do not provide explanations.
+
+The diagnosis text is below:
+{text_placeholder}
 ```

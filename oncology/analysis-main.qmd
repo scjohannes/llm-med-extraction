@@ -32,6 +32,20 @@ library(patchwork)
 ```{r load-data}
 #| output: false
 data <- read_parquet(here("data","oncology","analysis_data.parquet"))
+
+logs <- REDCapR::redcap_log_read(
+  redcap_uri = Sys.getenv("redcap_fxdb_url"),
+  token = Sys.getenv("llm_radio_api"),
+  log_begin_date = as.Date("2025-05-01"),
+  log_end_date = as.Date("2025-11-01"),
+  record = NULL,
+  user = NULL,
+  http_response_encoding = "UTF-8",
+  locale = readr::default_locale(),
+  verbose = TRUE,
+  config_options = NULL,
+  handle_httr = NULL
+)
 ```
 
 ## Table 1
@@ -49,20 +63,70 @@ modality_tbl <- data |>
   mutate(label = ifelse(pet_ct, "PET–CT", "CT/MRI")) |>
   arrange(desc(pet_ct)) |>
   mutate(pct = n / sum(n),
-         Value = glue("{n} ({percent(pct, accuracy = 0.1)})")) |>
-  transmute(Variable = "Imaging modality",
+         Value = glue("{n} ({percent(pct)})")) |>
+  mutate(Variable = "Imaging modality",
             Category = label,
-            Value)
+            Value, 
+            .keep = "none")
 ```
 
 ```{r n-sex}
-# prep for table 1 - sex
+# if want to redownload, set to TRUE
+if(FALSE){
+  imaging_data <- get_imaging_from_ier(data$ier_bk)
 
-```
+sex <- get_sex(imaging_data$PAT_BK)
+birth_date <- get_birth(imaging_data$PAT_BK)
 
-```{r n-age}
-# prep for table 1 - age
+baseline_data <- imaging_data |> 
+  left_join(birth_date, by = "PAT_BK") |>
+  left_join(sex, by = "PAT_BK") |>
+  mutate(
+    age = as.numeric(difftime(IMAGING_DATE, PAT_BIRTH_DATE, units = "days"))/365.25
+  ) |> 
+  group_by(PAT_BK) |> 
+  arrange(age) |> 
+  slice_head(n = 1) |> 
+  ungroup() |>
+  select(age, sex = PAT_GENDER_ID) |> 
+  distinct()
 
+arrow::write_parquet(baseline_data, here::here("output", "oncology", "data", "baseline_data.parquet"))
+} else {
+  baseline_data <- read_parquet(here("output", "oncology", "data", "baseline_data.parquet"))
+}
+
+tbl_age <- baseline_data |> 
+  summarise(
+    n       = n(),
+    mean    = mean(age),
+    sd      = sd(age),
+    median  = median(age),
+    IQR_low = quantile(age, 0.25),
+    IQR_high= quantile(age, 0.75)
+  ) |> 
+  mutate(
+    Value = glue(
+      "{mean |> round(1)}±{round(sd, digits = 1)}"),
+    Variable = "Patient Characteristics" ,
+    Category = "Age — yr"
+  ) |> 
+  select(Value, Variable, Category)
+
+tbl_sex <- baseline_data |> 
+  count(sex) |> 
+  mutate(
+    prop = n / sum(n)
+  ) |> 
+  mutate(
+    Value = glue(
+      "{n} ({prop |> percent()})"
+    ),
+    Variable = "Patient Characteristics",
+    Category = "Female Sex"
+  ) |> 
+  filter(sex == "W") |> 
+  select(Value, Variable, Category)
 ```
 
 What were the three most common primary diagnoses (plus other) among the 400 reports?
@@ -82,14 +146,15 @@ diag_top4_other <- data |>
     out <- if (other_n > 0) bind_rows(top4, tibble(truth = "Other*", n = other_n)) else top4
     out |>
       mutate(
-        pct   = n / sum(df$n),
-        Value = glue::glue("{n} ({scales::percent(pct, accuracy = 0.1)})")
+        pct   = round(n / sum(df$n), digits = 2),
+        Value = glue::glue("{n} ({scales::percent(pct)})")
       )
   })() |>
-  transmute(
+  mutate(
     Variable = "Primary Diagnosis",
     Category = truth,
-    Value
+    Value,
+    .keep = "none"
   )
 
 diag_top4_other
@@ -118,7 +183,7 @@ n_mets_patients <- data |>
 tbl_mets_any <- tibble::tibble(
   Variable = "Metastasis",
   Category = "Any metastasis",
-  Value = sprintf("%d (%.1f%%)", n_mets_patients, 100 * n_mets_patients / n_total_patients)
+  Value = sprintf("%d (%.0f%%)", n_mets_patients, 100 * n_mets_patients / n_total_patients)
 )
 
 tbl_mets_any
@@ -175,7 +240,7 @@ tbl_mets_top4 <- data |>
   # keep order: top4 first, then Other
   mutate(
     pct   = n / n_total_patients,
-    Value = sprintf("%d (%.1f%%)", n, 100 * pct)
+    Value = sprintf("%d (%.0f%%)", n, 100 * pct)
   ) |>
   transmute(
     Variable = "Metastasis location",
@@ -201,7 +266,7 @@ resp_tbl <- data |>
   group_by(pet_ct) |>
   mutate(
     p = n / sum(n),
-    Value = sprintf("%d (%.1f%%)", n, 100 * p),
+    Value = sprintf("%d (%.0f%%)", n, 100 * p),
     Variable = paste0("Treatment response (", ifelse(pet_ct, "PET–CT", "CT/MRI"), ")")
   ) |>
   arrange(Variable, desc(n)) |>
@@ -222,7 +287,7 @@ tf_tbl <- data |>
   count(Category, name = "n") |>
   mutate(
     p = n / sum(n),
-    Value = sprintf("%d (%.1f%%)", n, 100 * p)
+    Value = sprintf("%d (%.0f%%)", n, 100 * p)
   ) |>
   arrange(desc(n)) |>
   transmute(
@@ -235,6 +300,8 @@ tf_tbl <- data |>
 ```{r tb-01}
 #| echo: false
 table1_df <- bind_rows(
+  tbl_age,
+  tbl_sex,
   modality_tbl,
   diag_top4_other,     
   tbl_mets_top4,
@@ -246,7 +313,7 @@ table1 <- gt(
   rowname_col = "Category", 
   groupname_col = "Variable") |>
   tab_header(title = md("**Table 1.**")) |>
-  cols_label(Value = "n (%)") |>
+  cols_label(Value = "") |>
   fmt_missing(
     columns = everything(), 
     missing_text = "—") |>
@@ -355,7 +422,7 @@ pred <- avg_predictions(
   mutate(
     task, 
     grp,
-    Accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high),
+    Accuracy = sprintf("%.0f%% (%.1f–%.0f%%)", 100*estimate, 100*conf.low, 100*conf.high),
     .keep = "none"
   )
 # Group vs. human comparisons within each task 
@@ -915,130 +982,150 @@ ggsave(
 )
 ```
 
-## LLM comparison pre/post prompt refinement
+## Calculating time per report
 
-```{r prep-data-old}
+```{r efficiency-human}
 #| echo: false
-dat_old <- readRDS(here("data", "oncology", "redcap-2025-10-09-labels.rds"))$data
+#| output: false
 
-long_data <- dat_old |>
-  group_by(redcap_event_name) |>
-  pivot_longer(
-    cols = c(
-      primary_tumor,
-      bone_metastasis,
-      cns_metastasis,
-      meningeal_metastasis,
-      lung_metastasis,
-      pleural_metastasis,
-      adrenal_metastasis,
-      kidney_metastasis,
-      liver_metastasis,
-      spleen_metastasis,
-      pancreas_metastasis,
-      ovarian_metastasis,
-      peritoneal_metastasis,
-      lymph_node_metastasis,
-      soft_tissue_metastasis,
-      other_organ_metastasis,
-      no_tumor,
-      response_to_trt, 
-      response_to_trt_pet
-    ),
-    names_to = "item",
-    values_to = "value"
-  ) |> 
-  select(-c(oncology_radiology_extraction_complete, justification, prompt, sample_complete)) |> 
-  ungroup()
+df <- logs$data
 
-ground_truth_long <- readRDS(here("data", "oncology", "ground_truth_long.rds"))
-
-analysis_data <- long_data |>
-    group_by(ier_bk) |> 
-    filter(any(training == "Yes")) |> 
-    ungroup() |> 
-    filter(!redcap_event_name %in% c("Ground Truth", "Extraction 2", "Extraction 1")) |> 
-    group_by(ier_bk, redcap_event_name) |>
-    mutate(
-      value = case_when(
-        # I only want to change the value where item == "no_tumor"
-        item == "no_tumor" & 
-          any(value[item == "response_to_trt" | item == "response_to_trt_pet"] == "Not applicable") ~ "Not applicable",
-        TRUE ~ value
-      )
-    ) |> 
-    ungroup() |> 
-    left_join(ground_truth_long, by = c("ier_bk", "item")) |> 
-    # where NA for ground truth and value, then question was not applicable -> remove
-    filter(!is.na(value) & !is.na(truth)) |> 
-    mutate(
-        correct = if_else(value == truth, 1, 0),
-        task  = case_when(
-          str_detect(item, "metastasis") ~ "Metastasis",
-          str_detect(item, "primary_tumor") ~ "Diagnosis",
-          str_detect(item, "response_to_trt") ~ "Response to Treatment",
-          str_detect(item, "no_tumor") ~ "Radiologically Tumor Free",
-          TRUE ~ NA
-        ),
-        report_length = nchar(imaging_report)
-    )
-
-data_old  <- analysis_data  |> 
-  mutate(
-    grp = case_when(
-      model == "llama3.3:70b-instruct-q5_K_M" | model == "llama3.3:70b" ~ "llama3.3:70b",
-      model == "mistral-small:24b-instruct-2501-q4_K_M" | model == "mistral-small:24b" ~ "mistral-small:24b",
-      model == "rndcalcle01.qwen3:32b" | model == "qwen3:32b" ~ "qwen3:32b",
-      model == "rndcalcle01.qwq:32b" | model == "qwq:32b" ~ "qwq:32b",
-    ),
-    grp = factor(grp, levels = c("llama3.3:70b", "mistral-small:24b", "qwen3:32b", "qwq:32b")) 
-    ) |> 
-  mutate (v = "0")
-```
-
-```{r prep-data-new}
-#| echo: false
-data_new <- optim_sample |> 
-  mutate ( v = "1") |> 
-  filter(!redcap_event_name %in% c("Extraction 1", "Extraction 2")) |> 
-  filter(!grp == "gpt-oss:120b")
-```
-
-```{r llm-prompt-refinement-improvement}
-#| echo: false
-combined <- bind_rows(data_old, data_new) |>
-  mutate(grp = droplevels(grp))
-
-llm_improv <- glm(
-    correct ~ grp * (task + v),
-    data = combined,
-    family = binomial(link = "logit")
+# --- 2) Keep only "Update record ... (Extraction 1|2)" and drop Ground Truth / LLM1–4 ---
+clean_extractions <- df %>%
+  filter(
+    str_detect(action, regex("^Update record\\b.*\\(Extraction [12]\\)", ignore_case = TRUE)),
+    !str_detect(action, regex("\\b(Ground\\s*Truth|LLM\\s*[1-4])\\b", ignore_case = TRUE))
   )
 
-ap <- avg_predictions(llm_improv, by = c("task", "grp", "v"), type = "response", vcov = ~ier_bk)
-ap
+# --- 3) Ensure timestamp is a proper datetime (so sorting is truly chronological) ---
+if (!inherits(clean_extractions$timestamp, "POSIXt")) {
+  clean_extractions <- clean_extractions %>%
+    mutate(timestamp = ymd_hms(timestamp, quiet = TRUE))
+}
 
-plot_comparisons(
-  llm_improv,
-  variables = "v",
-  by = c("task", "grp"),
-  type = "response",
-  vcov = ~ier_bk
-) +
-  labs(
-    color = "LLM",
-    x = "",
-    y = "Accuracy Difference (post - pre)"
-  ) +
-    coord_flip() +
-    theme(
-      legend.position = "bottom"
-    ) +
-      geom_hline(yintercept = 0, linetype = "dashed", color = "grey50")
+# --- 4) Remove the oldest 400 entries for "schwenkej", then sort by user + time ---
+clean_extractions <- clean_extractions %>%
+  group_by(username) %>%
+  arrange(timestamp, .by_group = TRUE) %>%
+  filter(!(username == "schwenkej" & row_number() <= 400)) %>%
+  ungroup() %>%
+  arrange(username, timestamp)
 
-ggsave(
-  filename = here::here("output", "oncology", "figures", "llm_prompt_refinement_improvement.png"),
-  plot = last_plot(),
-  width = 8, height = 12, dpi = 300
-)
+
+# --- 5) Calculate approx time per report
+time <- clean_extractions |> 
+  group_by(username) |> 
+  arrange(username, timestamp) |> 
+  mutate(
+    prev_time = lag(timestamp),
+    gap = as.numeric(difftime(timestamp, prev_time, units = "secs")),
+    gap_imp = if_else(gap <= 5 | gap >= 300, NA_real_, gap)
+  ) |>
+  ungroup() |>
+  mutate(gap_imp = if_else(is.na(gap_imp), mean(gap_imp, na.rm = TRUE), gap_imp)) |>
+  relocate(c(prev_time, gap, gap_imp), .after = "timestamp") |>
+  summarise(
+    mean_sec = mean(gap_imp, na.rm = TRUE),
+    min_sec  = min(gap_imp,  na.rm = TRUE),
+    max_sec  = max(gap_imp,  na.rm = TRUE)
+  )
+```
+
+```{r efficiency-llm}
+#| echo: false
+#| output: false
+
+llm_eff <- read_csv(here("data", "oncology", "model_iteration_durations.csv"))
+
+# 1) Keep first two runs for gpt-oss:120b and sum them; drop other gpt-oss rows
+gpt_sum <- llm_eff |>
+  filter(model == "gpt-oss:120b") |>
+  arrange(start_time) |>
+  slice(1:2) |>                             
+  summarise(model = "gpt-oss:120b",
+            duration_secs = sum(duration_secs), .groups = "drop") |>
+  mutate(per_report_secs = duration_secs / 300)
+
+# 2) All other models: one row = one run, convert to per-report seconds
+others <- llm_eff |>
+  filter(model != "gpt-oss:120b") |>
+  mutate(per_report_secs = duration_secs / 300) |>
+  select(model, per_report_secs)
+
+# 3) Combine and summarise per model
+per_model <- bind_rows(
+  gpt_sum |> select(model, per_report_secs),
+  others
+) |>
+  group_by(model) |>
+  summarise(
+    mean_sec = mean(per_report_secs, na.rm = TRUE),
+    mean_min = mean_sec / 60,
+    .groups = "drop"
+  )
+```
+
+```{r}
+#| echo: false
+#| tbl-cap: "Mean extraction time per report by extractor group."
+# Combine human and LLM timing data
+combined_timing <- bind_rows(
+  # Human timing with range
+  time |> 
+    mutate(
+      group = "human",
+      mean_min = mean_sec / 60,
+      min_min = min_sec / 60,
+      max_min = max_sec / 60
+    ) |> 
+    select(group, mean_sec, mean_min, min_sec, max_sec, min_min, max_min),
+  
+  # LLM timing - rename and add NA for min/max
+  per_model |> 
+    rename(group = model) |> 
+    mutate(
+      min_sec = NA_real_,
+      max_sec = NA_real_,
+      min_min = NA_real_,
+      max_min = NA_real_
+    ) |>
+    select(group, mean_sec, mean_min, min_sec, max_sec, min_min, max_min)
+) |>
+  # Shorten LLM names - keep only up to parameter count
+  mutate(
+    group = case_when(
+      group == "llama3.3:70b-instruct-q5_K_M" ~ "llama3.3:70b",
+      group == "mistral-small:24b-instruct-2501-q4_K_M" ~ "mistral-small:24b",
+      TRUE ~ group
+    ),
+    group = factor(group, levels = c(
+      "human", 
+      "llama3.3:70b",
+      "mistral-small:24b", 
+      "qwen3:32b",
+      "qwq:32b",
+      "gpt-oss:120b"
+    ))
+  ) |>
+  arrange(group)
+
+# Create gt table with range for humans
+tbl_timing <- combined_timing |>
+  mutate(
+    time_display = if_else(
+      group == "human",
+      sprintf("%.1f (%.1f–%.1f)", mean_min, min_min, max_min),
+      sprintf("%.1f", mean_min)
+    )
+  ) |>
+  select(group, time_display) |>
+  gt() |>
+  cols_label(
+    group = "",
+    time_display = "Mean Time per Report (minutes)"
+  ) |>
+  cols_align(align = "center", columns = time_display) |> 
+  tab_options(data_row.padding = px(4))
+
+tbl_timing
 ```
