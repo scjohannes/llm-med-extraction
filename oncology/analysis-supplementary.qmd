@@ -192,13 +192,13 @@ m_acc
 
 ## eFigure 2
 
-![This figure shows the how prompts for classification of metastasis are adapted to the imaging report. Each report has an 'imaging type' identifier in their metadata. Based on this identifier, the report is automatically classified as pertaining to one of 19 body regions and the corresponding prompt is selected. The prompts used for metastasis classification are shown in \[PLACEHOLDER\].](images/llm-figs-final-meta.svg){#fig-prompt-meta style="color: white;" width="13cm"}
+![This figure shows the how prompts for classification of metastasis are adapted to the imaging report. Each report has an 'imaging type' identifier in their metadata. Based on this identifier, the report is automatically classified as pertaining to one of 19 body regions and the corresponding prompt is selected. The prompts used for metastasis classification are shown in \[PLACEHOLDER\].](images/eFigure2.png){#fig-prompt-meta style="color: white;" width="13cm"}
 
 {{< pagebreak >}}
 
 ## eFigure 3
 
-![This figure shows the how prompts for classification of response to treatment are chained. (1) A prompt to check the imaging report for being relevant to response to treatment is used. (2) The reports classified as eligible (in-scope) are categorized into reports mentioning RANO or RECIST using regular expressions. The prompts for data extraction are selected according to whether the imaging report was a PET scan, based on the report metadata (3). The prompts used for data extraction (4-7) are shown in \[PLACEHOLDER\].](images/llm-figs-final-rtt.svg){#fig-prompt-rtt style="color: white;" width="13cm"}
+![This figure shows the how prompts for classification of response to treatment are chained. (1) A prompt to check the imaging report for being relevant to response to treatment is used. (2) The reports classified as eligible (in-scope) are categorized into reports mentioning RANO or RECIST using regular expressions. The prompts for data extraction are selected according to whether the imaging report was a PET scan, based on the report metadata (3). The prompts used for data extraction (4-7) are shown in \[PLACEHOLDER\].](images/eFigure3.png){#fig-prompt-rtt style="color: white;" width="13cm"}
 
 {{< pagebreak >}}
 
@@ -442,7 +442,6 @@ ggsave(
 ```
 
 {{< pagebreak >}}
-
 
 ## eFigure 6
 
@@ -1625,15 +1624,19 @@ plot_predictions(mistakes, by = "report_length", type = "response", vcov = ~ier_
 ## Prompt and Pipeline Optimization
 
 ### Pipeline Adaptation
+
 We refined prompts using the prompt-optimization set ($n=100$). Initial tests showed that for most models, asking for immediate structured output resulted in classification errors where the model's provided justification did not match the extracted value of the structured output. To address this, we adjusted the pipeline to allow a model to first answer in free-text, and in a second step in the same chat output its response in a structured format. This approach led to improvements in performance across most models.
 
 ### Model-Specific Configuration (GPT-OSS:120B)
+
 We gained access to GPT-OSS:120B after the initial prompt optimization phase. Preliminary runs on the optimization set indicated that, unlike the other models, the multi-step reasoning pipeline worsened performance for this specific model. Consequently, we utilized a single integrated prompt for GPT-OSS:120B, where reasoning, and structured extraction were requested simultaneously.
 
 ### Task-Specific Scope Assessment
+
 For the *Response to Treatment* and *Radiological Absence of Tumor* tasks, we identified a specific issue where models frequently classified relevant reports as "Not Applicable" (out of scope) when tasked with assessing scope and classification simultaneously. To mitigate this issue of incorrectly excluding valid reports, we split the pipeline into distinct stages (see eFigure 3). First, a dedicated prompt asked the model to determine if the report was within the scope of the clinical question. If affirmed, subsequent prompts were triggered to perform the specific data extraction and classification.
 
 ### Ground Truth Validation
+
 To ensure the integrity of the study data, a senior oncologist (BK), blinded to the LLM predictions, reviewed all 43 reports that had been labeled as "out of scope" by the human abstractors. This review determined that 13 (30.2%) of these reports were, in fact, in scope and contained valid information for response assessment. These reports were subsequently relabeled and included in the final analysis.
 
 ## Extraction Guidelines for Humans
@@ -1892,7 +1895,7 @@ Use these self-contained examples to guide classification logic.
 
 ## Prompts
 
-These are prompts used in the classiciations pipelines. The prompts are better understood in the conext of the code. We encourage the reader to examine the code together with the prompts here [placeholder]!!!!!!
+These are prompts used in the classiciations pipelines. The prompts are better understood in the conext of the code. We encourage the reader to examine the code together with the prompts here \[placeholder\]!!!!!!
 
 ### Metastasis Classification
 
@@ -2243,7 +2246,7 @@ The imaging report text is below this line:
 
 Prompt for structured output
 
-```
+```         
 Your task is to read the provided medical text, which is a free text diagnosis from an Electronic Health Record (EHR).
 The input text will most likely be in German. Identify the primary diagnosis from the text.
 
