@@ -52,7 +52,7 @@ library(ggdist)
 ```{r}
 #| echo: false
 #| output: false
-boot_R <- 500
+boot_R <- 1000
 ```
 
 ```{r cache-setup}
@@ -103,6 +103,7 @@ okabe_ito_named <- c(
 )
 
 ord_legend    <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b","mistral-small:24b","llama3.3:70b")
+ord <- ord_legend
 model_levels  <- setdiff(ord_legend, "human")
 contrast_lvls <- paste0(model_levels, " - human")
 
@@ -156,9 +157,30 @@ data_test <- data |>
     grp = factor(grp, levels = c("human", "llama3.3:70b", "mistral-small:24b", "qwen3:32b", "qwq:32b",  "gpt-oss:120b")))
 ```
 
+```{r}
+#| echo: false
+#| output: false
+m_primary_outcome <- glm(
+    correct ~ grp * task,
+    data = data_test  |> filter(task == "Metastasis" | task == "Response to Treatment"),
+    family = binomial(link = "logit")
+  )
+
+m_acc2 <- glm(
+    correct ~ grp * task,
+    data = data_test  |> filter(task == "Diagnosis" | task == "Radiologically Tumor Free"),
+    family = binomial(link = "logit")
+  )
+
+m_acc3 <- glm(
+    correct ~ grp * task,
+    data = data_test, 
+    family = binomial(link = "logit"))
+```
+
 ```{r model-predictions-comparisons}
 ##| output: false
-m_acc <- brm(
+m_brms <- brm(
     correct ~ grp * task + (grp | ier_bk),
     data = data_test,
     family = bernoulli(link = "logit"),
@@ -170,16 +192,6 @@ m_acc <- brm(
     file = here("oncology", "models", "brms_accuracy_primary_endpoints"),
     file_refit = "on_change"
   )
-```
-
-```{r}
-#| output: false
-m_acc
-```
-
-```{r}
-#| output: false
-# plot(m_acc)
 ```
 
 # eFigures
@@ -346,6 +358,131 @@ ggsave(
 
 ## eFigure 5
 
+```{r fig-main-primary-endpoints}
+#| fig-width: 8
+#| fig-height: 8
+#| fig-cap: "Difference in the accuracy of Large Language Models (LLMs) compared to human extractors for the primary endpoints: Metastasis Detection (A) and Response to Treatment Classification (B). Point estimates with 90% confidence intervals are shown. The red solid line indicates the pre-specified equivalence margin of -5%. If the lower bound of the confidence interval is above this margin, the LLM is considered non-inferior to human extractors."
+#| echo: false
+#| warning: false
+
+# -------- Data for difference panels ----------------------------------------
+dfm <- avg_comparisons(
+  m_primary_outcome,
+  newdata  = data_test |> filter(task == "Metastasis"),
+  variable = "grp", by = "task", type = "response",
+  vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9
+) |> data.frame() |>
+  mutate(contrast = factor(contrast, levels = contrast_lvls))
+
+dfrtt <- avg_comparisons(
+  m_primary_outcome,
+  newdata  = data_test |> filter(task == "Response to Treatment"),
+  variable = "grp", by = "task", type = "response",
+  vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9
+) |> data.frame() |>
+  mutate(contrast = factor(contrast, levels = contrast_lvls))
+
+# Shared y-limits for difference panels
+lims <- range(c(dfm$conf.low, dfm$conf.high, dfrtt$conf.low, dfrtt$conf.high, -0.05, 0), na.rm = TRUE)
+
+# # -------- TOP: Accuracy (A, B) ----------------------------------------------
+# # Enforce identical x order by factoring 'grp' in newdata
+# new_m   <- data_test |> filter(task == "Metastasis") |> mutate(grp = factor(grp, levels = ord_legend))
+# new_rtt <- data_test |> filter(task == "Response to Treatment") |> mutate(grp = factor(grp, levels = ord_legend))
+
+# theme_top <- theme_medical() +
+#   theme(
+#     panel.grid.major.y = element_line(),
+#     panel.grid.major.x = element_blank(),
+#     axis.text.x  = element_blank(),
+#     axis.ticks.x = element_blank()
+#   )
+
+
+# pred_data_m <- avg_predictions(
+#   m_acc, 
+#   newdata = new_m, 
+#   by = c("task", "grp"), 
+#   type = "response", 
+#   vcov = ~ier_bk
+# ) |> 
+#   data.frame() |>
+#   mutate(grp = factor(grp, levels = ord_legend))
+
+# pred_data_rtt <- avg_predictions(
+#   m_acc, 
+#   newdata = new_rtt, 
+#   by = c("task", "grp"), 
+#   type = "response", 
+#   vcov = ~ier_bk
+# ) |> 
+#   data.frame() |>
+#   mutate(grp = factor(grp, levels = ord_legend))
+
+# # Build plots manually with position control
+# pA <- ggplot(pred_data_m, aes(x = grp, y = estimate, color = grp, fill = grp)) +
+#   geom_pointrange(
+#     aes(ymin = conf.low, ymax = conf.high),
+#     position = position_dodge(width = 0.8),  # Adjust this for spacing
+#     size = 0.8,
+#     linewidth = 0.8
+#   ) +
+#   shared_color + shared_fill +
+#   scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, 0.1)) +
+#   scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
+#   labs(tag = "A)", x = NULL, y = "Probability of Correct Response", title = "Metastasis") +
+#   theme_top
+
+# pB <- ggplot(pred_data_rtt, aes(x = grp, y = estimate, color = grp, fill = grp)) +
+#   geom_pointrange(
+#     aes(ymin = conf.low, ymax = conf.high),
+#     position = position_dodge(width = 0.8),  # Adjust this for spacing
+#     size = 0.8,
+#     linewidth = 0.8
+#   ) +
+#   shared_color + shared_fill +
+#   scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, 0.1)) +
+#   scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
+#   labs(tag = "B)", x = NULL, y = NULL, title = "Response to Treatment") +
+#   theme_top
+
+
+# -------- BOTTOM: Difference vs. human (C, D) --------------------------------
+theme_bottom <- theme_medical() +
+  theme(
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    panel.grid.major.y = element_line(colour = "grey85"),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank()
+  )
+
+pC <- ggplot(dfm, aes(x = contrast, y = estimate)) +
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high)) +
+  geom_hline(yintercept = 0,     linetype = "dotted") +
+  geom_hline(yintercept = -0.05, linetype = "solid", color = "red") +
+  scale_y_continuous(limits = lims, expand = expansion(mult = 0.02)) +
+  coord_flip() +
+  labs(tag = "A)", title = "Metastasis", x = NULL) +
+  theme_medical()
+
+pD <- ggplot(dfrtt, aes(x = contrast, y = estimate)) +
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high)) +
+  geom_hline(yintercept = 0,     linetype = "dotted") +
+  geom_hline(yintercept = -0.05, linetype = "solid", color = "red") +
+  scale_y_continuous(limits = lims, expand = expansion(mult = 0.02)) +
+  coord_flip() +
+  labs(tag = "B)", title = "Response to Treatment", x = NULL) +
+  theme_medical()
+
+# -------- Assemble & save ----------------------------------------------------
+pC / pD
+```
+
+## eFigure 6
+
 ```{r fig-diagnosis-accuracy}
 #| warning: false
 #| echo: false
@@ -380,15 +517,6 @@ diagnosis_boot_results <- boot_results |>
     conf.low = quantile(estimate, 0.025),
     conf.high = quantile(estimate, 0.975)
   )
-
-# consistent ordering
-ord <- c(
-  "human",
-  "gpt-oss:120b",
-  "qwen3:32b",
-  "qwq:32b",
-  "mistral-small:24b",
-  "llama3.3:70b")
 
 # palette (high contrast, colorblind-friendly-ish)
 pal_models <- c(
@@ -443,7 +571,7 @@ ggsave(
 
 {{< pagebreak >}}
 
-## eFigure 6
+## eFigure 7
 
 ```{r fig-ppv-npv-meta}
 #| fig-width: 10
@@ -455,10 +583,6 @@ ggsave(
 dat_meta <- data_test |>
   filter(task == "Metastasis") |>
   mutate(truth = if_else(truth == "Yes", "Sensitivity", "Specificity"))
-
-# Desired row order for models/groups
-ord <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
-             "mistral-small:24b","llama3.3:70b")
 
 # Apply the ordering
 dat_meta <- dat_meta |>
@@ -559,7 +683,7 @@ metrics_long |>
 
 {{< pagebreak >}}
 
-## eFigure 7
+## eFigure 8
 
 ```{r confusion-meta-llm}
 #| echo: false
@@ -642,7 +766,7 @@ ggsave(
 
 {{< pagebreak >}}
 
-## eFigure 8
+## eFigure 9
 
 ```{r}
 #| echo: false
@@ -714,7 +838,7 @@ ggsave(
 
 {{< pagebreak >}}
 
-## eFigure 9
+## eFigure 10
 
 ```{r fig-main-primary-endpoints}
 #| fig-width: 8
@@ -726,7 +850,7 @@ ggsave(
 # -------- Data for difference panels ----------------------------------------
 dfm <- cache_df("avg_comp_metastasis", function() {
   avg_comparisons(
-    m_acc,
+    m_brms,
     newdata  = data_test |> filter(task == "Metastasis"),
     variable = "grp", by = "task", type = "response",
     re_formula = NULL
@@ -738,7 +862,7 @@ dfm <- cache_df("avg_comp_metastasis", function() {
 
 dfrtt <- cache_df("avg_comp_response_to_treatment", function() {
   avg_comparisons(
-    m_acc,
+    m_brms,
     newdata  = data_test |> filter(task == "Response to Treatment"),
     variable = "grp", by = "task", type = "response",
     re_formula = NULL
@@ -766,7 +890,7 @@ theme_top <- theme_medical() +
 
 pred_data_m <- cache_df("avg_pred_metastasis", function() {
   avg_predictions(
-    m_acc, 
+    m_brms, 
     newdata = data_test |> filter(task == "Metastasis"), 
     by = "grp", 
     type = "response", 
@@ -779,7 +903,7 @@ pred_data_m <- cache_df("avg_pred_metastasis", function() {
 
 pred_data_rtt <- cache_df("avg_pred_response_to_treatment", function() {
   avg_predictions(
-    m_acc, 
+    m_brms, 
     newdata = data_test |> filter(task == "Response to Treatment"), 
     by = "grp", 
     type = "response", 
@@ -885,7 +1009,7 @@ ggsave(
 
 {{< pagebreak >}}
 
-## eFigure 10
+## eFigure 11
 
 ```{r fig-diff-secondary-endpoints}
 #| echo: false
@@ -897,7 +1021,7 @@ ggsave(
 # A) Diagnosis
 df_diag <- cache_df("avg_comp_diagnosis", function() {
   avg_comparisons(
-    m_acc,
+    m_brms,
     newdata = data_test |> filter(task == "Diagnosis"),
     variable = "grp", by = "task", type = "response",
     re_formula = NULL
@@ -910,7 +1034,7 @@ df_diag <- cache_df("avg_comp_diagnosis", function() {
 # B) Radiologically Tumor Free
 df_rtf <- cache_df("avg_comp_tumor_free", function() {
   avg_comparisons(
-    m_acc,
+    m_brms,
     newdata = data_test |> filter(task == "Radiologically Tumor Free"),
     variable = "grp", by = "task", type = "response",
     re_formula = NULL
@@ -924,7 +1048,7 @@ df_rtf <- cache_df("avg_comp_tumor_free", function() {
 # Note: calculating marginal contrast across the whole analysis sample
 df_over <- cache_df("avg_comp_overall", function() {
   avg_comparisons(
-    m_acc,
+    m_brms,
     newdata = data_test, # Uses full sample to average over all tasks
     variable = "grp", type = "response",
     re_formula = NULL
@@ -1011,7 +1135,7 @@ ggsave(
 
 {{< pagebreak >}}
 
-## eFigure 11
+## eFigure 12
 
 ```{r fig-acc-secondary-endpoints}
 #| fig-width: 8
@@ -1022,7 +1146,7 @@ ggsave(
 # A) Diagnosis
 pred_diag <- cache_df("avg_pred_diagnosis", function() {
   avg_predictions(
-    m_acc,
+    m_brms,
     newdata = data_test |> filter(task == "Diagnosis"),
     by = "grp", type = "response", re_formula = NULL
   ) |> 
@@ -1034,7 +1158,7 @@ pred_diag <- cache_df("avg_pred_diagnosis", function() {
 # B) Radiologically Tumor Free
 pred_rtf <- cache_df("avg_pred_tumor_free", function() {
   avg_predictions(
-    m_acc,
+    m_brms,
     newdata = data_test |> filter(task == "Radiologically Tumor Free"),
     by = "grp", type = "response", re_formula = NULL
   ) |> 
@@ -1046,7 +1170,7 @@ pred_rtf <- cache_df("avg_pred_tumor_free", function() {
 # C) Overall (Marginalized over all tasks in data_test)
 pred_over <- cache_df("avg_pred_overall", function() {
   avg_predictions(
-    m_acc,
+    m_brms,
     newdata = data_test, 
     by = "grp", type = "response", re_formula = NULL
   ) |> 
@@ -1130,152 +1254,211 @@ ggsave(
 
 ## eTable 1
 
-```{r}
+```{r tbl-acc-primary-endpoints}
+#| tbl-cap: "Accuracy with 95% confidence intervals for metastasis status and reponse to treatment, by human extractors and LLMs, along with comparisons to human performance with 90% confidence intervals."
 #| echo: false
-#| output: false
-m_acc3 <- glm(
-    correct ~ grp * task,
-    data = data_test, 
-    family = binomial(link = "logit") )
 
-avg_predictions(m_acc3,by = "grp", type = "response", vcov = ~ ier_bk)
-avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
-```
-
-```{r tbl-acc-secondary-endpoints}
-#| echo: false
-#| tbl-cap: "Accuracy with 95% confidence intervals for diagnosis, radiological absence of tumor, and across all tasks, by human extractors and LLMs, along with comparisons to human performance."
-
-# --- Display order for groups and tasks --------------------------------------
-ord  <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
-              "mistral-small:24b","llama3.3:70b")
-ord_task <- c("Diagnosis","Radiologically Tumor Free","Overall")
-
-# -- Fit Model for Inference ---
-
-m_acc2 <- glm(
-    correct ~ grp * task,
-    data = data_test  |> filter(task == "Diagnosis" | task == "Radiologically Tumor Free"),
-    family = binomial(link = "logit")
+pred_data <- avg_predictions(
+  m_primary_outcome, by = c("grp", "task"), type = "response", vcov = ~ ier_bk
+) |>
+  as_tibble() |>
+  select(
+    task, 
+    grp, 
+    acc_est = estimate, 
+    acc_low = conf.low, 
+    acc_high = conf.high
   )
 
-
-# --- Predicted accuracies by task × group-----------------
-pred_task <- avg_predictions(
-  m_acc2, by = c("grp","task"), type = "response",
-  vcov = ~ier_bk) |>
-  data.frame() |>
-  mutate(
-    task, grp,
-    accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high),
-    .keep = "none"
-  )
-# --- Predicted overall accuracies by group ---------------------------------
-pred_overall <- avg_predictions(
-  m_acc3, by = "grp", type = "response",
-  vcov = ~ier_bk) |>
-  data.frame() |>
-  mutate(task = "Overall") |>
-  mutate(
-    task, grp,
-    accuracy = sprintf("%.1f%% (%.1f–%.1f%%)", 100*estimate, 100*conf.low, 100*conf.high),
-    .keep = "none"
+comp_data <- avg_comparisons(
+  m_primary_outcome, variable = "grp", by = "task", type = "response",
+  vcov = ~ ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.90
+) |>
+  as_tibble() |>
+  mutate(grp = str_remove(contrast, " - human")) |>
+  select(
+    task, 
+    grp, 
+    diff_est = estimate, 
+    diff_low = conf.low, 
+    diff_high = conf.high, 
+    p_val = p.value.noninf
   )
 
-pred_all <- bind_rows(pred_task, pred_overall)
+# 3. Join and Order
+tab_data <- pred_data |>
+  left_join(comp_data, by = c("task", "grp")) |>
+  mutate(grp = factor(grp, levels = ord)) |>
+  arrange(task, grp)
 
-# --- Model vs. human comparisons within each task --------------------------
-comp_task <- avg_comparisons(
-  m_acc2, variable = "grp", by = "task", type = "response",
-  vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.95) |>
-  data.frame() |>
-  mutate(
-    grp = str_replace(contrast, "\\s*-\\s*human$", ""),
-    noninferior = conf.low > -0.05
+# 4. Build Table
+tab_data |>
+  gt(groupname_col = "task") |>
+  
+  # --- Formatting: Accuracy (Percent) ---
+  fmt_percent(
+    columns = c(acc_est, acc_low, acc_high),
+    decimals = 1 # Matches your %.0f preference (change to 1 if needed)
   ) |>
-  mutate(
-    task, grp,
-    mod_vs_human = sprintf("%+.1f (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
-    p.value.noninf,
-    .keep = "none"
-  )
-# --- Overall comparisons vs human -----------------------------------------
-comp_overall <- avg_comparisons(
-  m_acc3, variable = "grp", type = "response",
-  vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.90) |>
-  data.frame() |>
-  mutate(
-    task = "Overall",
-    grp = str_replace(contrast, "\\s*-\\s*human$", ""),
-    noninferior = conf.low > -0.05
+  cols_merge(
+    columns = c(acc_est, acc_low, acc_high),
+    pattern = "{1} ({2}–{3})" # En-dash separator
   ) |>
-  mutate(
-    task, grp,
-    mod_vs_human= sprintf("%+.1f (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
-    p.value.noninf,
-    .keep = "none"
-  )
-
-comp_all <- bind_rows(comp_task, comp_overall)
-
- # --- Assemble table data -------------------------------------------------
-tab_all <- pred_all |>
-  left_join(comp_all, by = c("task","grp")) |>
-  mutate(
-    task = factor(task, levels = ord_task),
-    grp  = factor(grp,  levels = ord)
+  
+  # --- Formatting: Difference (Percentage Points) ---
+  fmt_number(
+    columns = diff_est,
+    decimals = 1,
+    scale_by = 100,
+    force_sign = TRUE
   ) |>
-  arrange(task, grp) |>
-  mutate(
-    mod_vs_human = if_else(grp == "human", "", mod_vs_human),
+  fmt_number(
+    columns = c(diff_low, diff_high),
+    decimals = 1,
+    scale_by = 100
   ) |>
-  select(task, grp, accuracy, mod_vs_human,p.value.noninf)
-
-# --- Build gt table --------------------------------------------------------
-pred_tbl_2 <- gt(tab_all, groupname_col = "task") |>
-  cols_label(
-    task = "Task", 
-    grp = "",
-    accuracy = "Accuracy (95% CI)",
-    mod_vs_human = "Difference (90% CI)",
-    p.value.noninf  = "P-value NI"
+  cols_merge(
+    columns = c(diff_est, diff_low, diff_high),
+    pattern = "{1} ({2} to {3})"
   ) |>
+  
+  # --- Formatting: P-values ---
   fmt(
-    columns = p.value.noninf,
-    fns = function(x) {
-      ifelse(is.na(x), "—", 
-             ifelse(x < 0.001, "<0.001", 
-                    sprintf("%.3f", x)))
-    }
+    columns = p_val,
+    fns = scales::label_pvalue(accuracy = 0.001)
+  ) |>
+  
+  # --- Cleanup: Handling the "Human" Reference Row ---
+  # The join created NAs for comparison cols. We replace those with empty strings.
+  sub_missing(
+    columns = c(diff_est, p_val), 
+    missing_text = ""
+  ) |>
+  text_transform(
+    locations = cells_body(
+      columns = c(diff_est, p_val),
+      rows = grp == "human"
+    ),
+    fn = function(x) ""
+  ) |>
+  # --- Labels and Layout ---
+  cols_label(
+    grp = "",
+    acc_est = "Accuracy (95% CI)",
+    diff_est = "Difference (pp) (90% CI)",
+    p_val = "P-value NI"
   ) |>
   tab_options(data_row.padding = px(4))
-
-pred_tbl_2
-
-# --- Export table -----------------------------------------------------------
-gt::gtsave(
-  pred_tbl_2,
-  filename = "supp-table-1-secondary-outcomes.docx",
-  path = here::here("output", "oncology", "tables")
-)
 ```
 
 {{< pagebreak >}}
 
 ## eTable 2
 
+```{r}
+#| tbl-cap: "Accuracy with 95% confidence intervals for diagnosis, radiological absence of tumor, and across all tasks, by human extractors and LLMs, along with comparisons to human performance with 90% confidence intervals."
+
+ord_task <- c("Diagnosis","Radiologically Tumor Free","Overall")
+# --- 1. Data Preparation ---
+
+# Predictions: Combine Task (m_acc2) + Overall (m_acc3)
+df_pred <- bind_rows(
+  avg_predictions(m_acc2, by = c("grp", "task"), type = "response", vcov = ~ier_bk),
+  avg_predictions(m_acc3, by = "grp", type = "response", vcov = ~ier_bk) |> mutate(task = "Overall")
+) |>
+  as_tibble() |>
+  select(task, grp, acc_est = estimate, acc_low = conf.low, acc_high = conf.high)
+
+df_comp <- bind_rows(
+  avg_comparisons(m_acc2, variable = "grp", by = "task", type = "response", 
+                  vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.90),
+  avg_comparisons(m_acc3, variable = "grp", type = "response", 
+                  vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.90) |> mutate(task = "Overall")
+) |>
+  as_tibble() |>
+  mutate(grp = str_remove(contrast, " - human")) |>
+  select(task, grp, diff_est = estimate, diff_low = conf.low, diff_high = conf.high, p_val = p.value.noninf)
+
+# Join and Order
+tab_data <- df_pred |>
+  left_join(df_comp, by = c("task", "grp")) |>
+  mutate(
+    task = factor(task, levels = ord_task),
+    grp  = factor(grp, levels = ord)
+  ) |>
+  arrange(task, grp)
+
+# --- 2. Build Table ---
+
+pred_tbl_2 <- tab_data |>
+  gt(groupname_col = "task") |>
+  
+  # --- Accuracy Formatting (%.1f%%) ---
+  fmt_percent(
+    columns = c(acc_est, acc_low, acc_high),
+    decimals = 1
+  ) |>
+  cols_merge(
+    columns = c(acc_est, acc_low, acc_high),
+    pattern = "{1} ({2}–{3})"
+  ) |>
+  
+  # --- Difference Formatting (%.1f pp) ---
+  fmt_number(
+    columns = diff_est,
+    decimals = 1,
+    scale_by = 100,
+    force_sign = TRUE
+  ) |>
+  fmt_number(
+    columns = c(diff_low, diff_high),
+    decimals = 1,
+    scale_by = 100
+  ) |>
+  cols_merge(
+    columns = c(diff_est, diff_low, diff_high),
+    pattern = "{1} ({2} to {3})"
+  ) |>
+  
+  # --- P-value Formatting ---
+  fmt(
+    columns = p_val,
+    fns = scales::label_pvalue(accuracy = 0.001)
+  ) |>
+  
+  # --- Cleanup: Wipe 'human' rows ---
+  text_transform(
+    locations = cells_body(
+      columns = c(diff_est, p_val),
+      rows = grp == "human"
+    ),
+    fn = function(x) ""
+  ) |>
+  
+  # --- Labels ---
+  cols_label(
+    grp = "",
+    acc_est = "Accuracy (95% CI)",
+    diff_est = "Difference (pp) (90% CI)", # Updated label to reflect mixed CIs
+    p_val = "P-value NI"
+  ) |>
+  tab_options(data_row.padding = px(4))
+
+pred_tbl_2
+```
+
+{{< pagebreak >}}
+
+## eTable 3
+
 ```{r tbl-ppv-npv-meta}
 #| echo: false
-#| tbl-cap: "Sensitivity, Specificity, PPV, and NPV for Metastasis Detection by Human Extractors and LLMs"
+#| tbl-cap: "Sensitivity, Specificity, PPV, and NPV for Metastasis Classification by Human Extractors and LLMs"
 
 # --- 1) Subset to Metastasis -------------------------------------------------
 dat_meta <- data_test |>
   filter(task == "Metastasis") |>
   mutate(truth = if_else(truth == "Yes", "Sensitivity", "Specificity"))
-
-# Desired row order for models/groups
-ord <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b",
-             "mistral-small:24b","llama3.3:70b")
 
 # Apply the ordering
 dat_meta <- dat_meta |>
@@ -1380,7 +1563,7 @@ gt::gtsave(
 
 {{< pagebreak >}}
 
-## eTable 3
+## eTable 4
 
 ```{r tbl-ppv-npv-rtt}
 #| echo: false

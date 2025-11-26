@@ -240,10 +240,11 @@ tbl_mets_top4 <- data |>
   # keep order: top4 first, then Other
   mutate(
     pct   = n / n_total_patients,
-    Value = sprintf("%d (%.0f%%)", n, 100 * pct)
+    Value = sprintf("%d (%.0f%%)", n, 100 * pct),
+    Variable = "Metastasis location"
   ) |>
-  transmute(
-    Variable = "Metastasis location",
+  select(
+    Variable,
     Category,
     Value
   )
@@ -287,11 +288,12 @@ tf_tbl <- data |>
   count(Category, name = "n") |>
   mutate(
     p = n / sum(n),
-    Value = sprintf("%d (%.0f%%)", n, 100 * p)
+    Value = sprintf("%d (%.0f%%)", n, 100 * p),
+    Variable = "Tumor-free status"
   ) |>
   arrange(desc(n)) |>
-  transmute(
-    Variable = "Tumor-free status",
+  select(
+    Variable,
     Category,
     Value
   )
@@ -314,7 +316,7 @@ table1 <- gt(
   groupname_col = "Variable") |>
   tab_header(title = md("**Table 1.**")) |>
   cols_label(Value = "") |>
-  fmt_missing(
+  sub_missing(
     columns = everything(), 
     missing_text = "—") |>
   tab_options(
@@ -385,8 +387,6 @@ theme_medical <- function(base_size = 11, base_family = "sans") {
 }
 ```
 
-### Primary endpoints: (response to treatment, metastasis status)
-
 ```{r model-predictions-comparisons}
 #| echo: false
 #| output: false
@@ -400,85 +400,6 @@ avg_predictions(m_acc, by = c("grp", "task"), type = "response", vcov = ~ier_bk)
 avg_comparisons(m_acc, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
 ```
 
-#### Table for predictions and comparisons
-
-```{r tbl-acc-primary-endpoints}
-#| echo: false
-
-# Order for groups (legend/rows) 
-ord <- c(
-  "human",
-  "gpt-oss:120b",
-  "qwen3:32b",
-  "qwq:32b",
-  "mistral-small:24b",
-  "llama3.3:70b")
-
-# Predicted accuracies by task × group 
-pred <- avg_predictions(
-  m_acc, by = c("grp", "task"), type = "response", vcov = ~ ier_bk
-) |>
-  data.frame() |>
-  mutate(
-    task, 
-    grp,
-    Accuracy = sprintf("%.0f%% (%.1f–%.0f%%)", 100*estimate, 100*conf.low, 100*conf.high),
-    .keep = "none"
-  )
-# Group vs. human comparisons within each task 
-comp <- avg_comparisons(
-  m_acc, variable = "grp", by = "task", type = "response",
-  vcov = ~ ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.90
-) |>
-  data.frame() |>
-  mutate(
-    grp = str_replace(contrast, "\\s*-\\s*human$", ""),    
-    noninferior = conf.low > -0.05
-  ) |>
-  mutate(
-    task, 
-    grp,
-    mod_vs_human = sprintf("%+.1f (%.1f to %.1f)", 100*estimate, 100*conf.low, 100*conf.high),
-    p.value.noninf,
-    .keep = "none"
-  )
-
-# table
-tab <- pred |>
-  left_join(comp, by = c("task", "grp")) |>
-  mutate(grp = factor(grp, levels = ord)) |>
-  arrange(task, grp) |>
-  mutate(
-    mod_vs_human = if_else(grp == "human", "", mod_vs_human)
-  ) |>
-  select(task, grp, Accuracy, mod_vs_human, p.value.noninf)
-
-pred_tbl <- gt(tab, groupname_col = "task") |>
-  cols_label(
-    task = "Task",
-    grp  = "",
-    Accuracy = "Accuracy (95% CI)",
-    mod_vs_human = "Difference (95% CI)",
-    p.value.noninf  = "P-value NI"
-  ) |>
-  fmt(
-    columns = p.value.noninf,
-    fns = function(x) {
-      ifelse(is.na(x), "—", 
-             ifelse(x < 0.001, "<0.001", 
-                    sprintf("%.3f", x)))
-    }
-  ) |>
-  tab_options(data_row.padding = px(4))
-
-# Export table 
-gt::gtsave(
-  pred_tbl,
-  filename = here::here("output", "oncology", "figures", "Accuracy_table_primary.docx")
-)
-```
-
-#### Main Fig. Difference & Accuracy: primary endpoints
 
 ```{r fig-main-primary-endpoints}
 #| fig-width: 
@@ -587,19 +508,6 @@ pB <- ggplot(pred_data_rtt, aes(x = grp, y = estimate, color = grp, fill = grp))
   theme_top
 
 
-# pA <- plot_predictions(m_acc, newdata = new_m,  by = c("task","grp"), type = "response", vcov = ~ier_bk) +
-#   shared_color + shared_fill +
-#   scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
-#   scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) + 
-#   labs(tag = "A", x = NULL, y = "Probability of Correct Response", title = "Metastasis") +
-#   theme_top
-
-# pB <- plot_predictions(m_acc, newdata = new_rtt, by = c("task","grp"), type = "response", vcov = ~ier_bk) +
-#   shared_color + shared_fill +
-#   scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
-#   labs(tag = "B", x = NULL, y = NULL, title = "Response to Treatment") +
-#   theme_top
-
 # -------- BOTTOM: Difference vs. human (C, D) --------------------------------
 theme_bottom <- theme_medical() +
   theme(
@@ -618,7 +526,7 @@ pC <- ggplot(dfm, aes(x = contrast, y = estimate)) +
   geom_hline(yintercept = -0.05, linetype = "solid", color = "red") +
   scale_y_continuous(limits = lims, expand = expansion(mult = 0.02)) +
   coord_flip() +
-  labs(tag = "C)", title = "Metastasis", x = NULL) +
+  labs(tag = "A)", title = "Metastasis", x = NULL) +
   theme_medical()
 
 pD <- ggplot(dfrtt, aes(x = contrast, y = estimate)) +
@@ -627,89 +535,79 @@ pD <- ggplot(dfrtt, aes(x = contrast, y = estimate)) +
   geom_hline(yintercept = -0.05, linetype = "solid", color = "red") +
   scale_y_continuous(limits = lims, expand = expansion(mult = 0.02)) +
   coord_flip() +
-  labs(tag = "D)", title = "Response to Treatment", x = NULL) +
+  labs(tag = "B)", title = "Response to Treatment", x = NULL) +
   theme_medical()
 
-# pC <- ggplot(dfm, aes(x = contrast, y = estimate, color = contrast)) +
-#   geom_pointrange(aes(ymin = conf.low, ymax = conf.high),     size = 0.8,
-#     linewidth = 0.8) +
-#   geom_hline(yintercept = 0,      linetype = "dotted") +
-#   geom_hline(yintercept = -0.05,  linetype = "solid", color = "red") +
-#   scale_x_discrete(limits = contrast_lvls) +
-#   scale_y_continuous(limits = lims, expand = expansion(mult = 0.02)) +
-#   diff_color +
-#   labs(tag = "C", y = "Accuracy LLM - Accuracy Human", x = NULL) +
-#   theme_bottom +
-#   guides(color = "none")
-
-# pD <- ggplot(dfrtt, aes(x = contrast, y = estimate, color = contrast)) +
-#   geom_pointrange(aes(ymin = conf.low, ymax = conf.high),     size = 0.8,
-#     linewidth = 0.8) +
-#   geom_hline(yintercept = 0,      linetype = "dotted") +
-#   geom_hline(yintercept = -0.05,  linetype = "solid", color = "red") +
-#   scale_x_discrete(limits = contrast_lvls) +
-#   scale_y_continuous(limits = lims, expand = expansion(mult = 0.02)) +
-#   diff_color +
-#   labs(tag = "D", y = NULL, x = NULL) +
-#   theme_bottom +
-#   guides(color = "none")
-
-#------------------------------- arrow: 
-# place just above the red line (-0.05)
-y0 <- -0.01        # arrow base (slightly above the red line)
-y1 <- -0.04        # arrow tip (points down)
-yl <- y1 - y0 - 0.004     # label y
-
-# anchor at the first x category, then nudge left toward the y-axis
-ann_df <- data.frame(x = contrast_lvls[1], y0 = y0, y1 = y1, yl = yl, lab = "Favors human")
-
-add_vertical_arrow <- function(p) {
-  p +
-    geom_segment(
-      data = ann_df,
-      aes(x = x, xend = x, y = y0, yend = y1),
-      inherit.aes = FALSE,
-      linewidth = 0.5, colour = "black",
-      arrow = grid::arrow(type = "closed", length = grid::unit(3.5, "mm")),
-      position = position_nudge(x = -1.45)  # push further left
-    ) +
-    geom_text(
-      data = ann_df,
-      aes(x = x, y = yl, label = lab),
-      inherit.aes = FALSE,
-      hjust = 0, vjust = 0, size = 4,
-      angle = 90,
-      position = position_nudge(x = -1.6)  
-    ) +
-    coord_cartesian(clip = "off", xlim = c(0.3, NA)) +  # adjust left boundary
-    theme(plot.margin = margin(5.5, 5.5, 5.5, 40))  # increase left margin
-} 
-
-# pC <- add_vertical_arrow(pC)
-# pD <- add_vertical_arrow(pD)
-
-# -------- Vertical separator between columns (A/C vs B/D) --------------------
-vsep <- ggplot() +
-  annotate("segment", x = 0.5, xend = 0.5, y = 0, yend = 1, linewidth = 0.8, colour = "grey55") +
-  coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), expand = FALSE) +
-  ggplot2::theme_void() +
-  theme(plot.margin = margin(0, 0, 0, 0))
-
 # -------- Assemble & save ----------------------------------------------------
-top_row <- (pA + pB) + 
-  plot_layout(guides = "collect") & 
-  theme(legend.position = "bottom")
+fig1 <- (pA + pB) + 
+  plot_layout(guides = "collect") +
+  plot_annotation(theme = theme(legend.position = "bottom"))
 
-# Combine with bottom plots (no legend)
-full_fig_primary <- top_row / pC / pD +
-  plot_layout(heights = c(6, 2, 2))
-
-full_fig_primary
+fig1_supp <- pC/ pD
 
 ggsave(
   filename = here::here("output", "oncology", "figures", "full_fig_primary.png"),
-  plot = full_fig_primary, width = 8, height = 9, dpi = 300
+  plot = fig1, width = 8, height = 8, dpi = 300
 )
+
+ggsave(
+  filename = here::here("output", "oncology", "figures", "full_fig_primary.svg"),
+  plot = fig1, width = 8, height = 8, dpi = 300
+)
+```
+
+## Table 2
+
+```{r}
+ord <- c(
+  "human",
+  "gpt-oss:120b",
+  "qwen3:32b",
+  "qwq:32b",
+  "mistral-small:24b",
+  "llama3.3:70b")
+
+tab_data <- avg_comparisons(
+  m_acc, variable = "grp", by = "task", type = "response",
+  vcov = ~ ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.90
+) |>
+  as_tibble() |>
+  mutate(
+    grp = str_remove(contrast, " - human") |> factor(levels = ord),
+    # Pre-multiply p-value threshold logic if desired, or handle in gt
+  ) |>
+  arrange(task, grp) |>
+  select(task, grp, estimate, conf.low, conf.high, p.value.noninf)
+
+# 2. Build Table
+tab_data |>
+  gt(groupname_col = "task") |>
+  # Format the numbers
+  fmt_number(columns = c(estimate, conf.low, conf.high), decimals = 1,
+    scale_by = 100) |>
+  # Merge them into the specific pattern
+  cols_merge(
+    columns = c(estimate, conf.low, conf.high),
+    pattern = "{1} ({2} to {3})"
+  ) |>
+  # Handle P-values (using scales makes this very concise)
+  fmt(
+    columns = p.value.noninf,
+    fns = scales::label_pvalue(accuracy = 0.001) 
+  ) |>
+  # Labels and Styling
+  cols_label(
+    grp = "Contrast",
+    estimate = "Difference in Accuracy (90% CI)",
+    p.value.noninf = "P-value"
+  ) |>
+  # Add " - human" back visually without mutating data
+  text_transform(
+    locations = cells_body(columns = grp),
+    fn = function(x) paste(x, "- human")
+  ) |>
+  tab_options(data_row.padding = px(4)) |>
+  gtsave(filename = here::here("output", "oncology", "figures", "table_2.docx"))
 ```
 
 ## Figure 2
