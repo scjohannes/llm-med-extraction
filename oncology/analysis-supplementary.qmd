@@ -36,7 +36,7 @@ library(ggdist)
 #| output: false
 
 set.seed(71237)
-boot_R <- 10
+boot_R <- 1000
 ```
 
 ```{r cache-setup}
