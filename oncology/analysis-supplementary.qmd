@@ -220,13 +220,13 @@ m_brms <- brm(
 
 ## eFigure 2
 
-![This figure shows the how prompts for classification of metastasis are adapted to the imaging report. Each report has an 'imaging type' identifier in their metadata. Based on this identifier, the report is automatically classified as pertaining to one of 19 body regions and the corresponding prompt is selected. The prompts used for metastasis classification are shown in \[PLACEHOLDER\].](images/eFigure2.png){#fig-prompt-meta style="color: white;" width="13cm"}
+![This figure shows the how prompts for classification of metastasis are adapted to the imaging report. Each report has an 'imaging type' identifier in their metadata. Based on this identifier, the report is automatically classified as pertaining to one of 19 body regions and the corresponding prompt is selected. The prompts used for metastasis classification are shown in Section @sec-metastasis).](images/eFigure2.png){#fig-prompt-meta style="color: white;" width="13cm"}
 
 {{< pagebreak >}}
 
 ## eFigure 3
 
-![This figure shows the how prompts for classification of response to treatment are chained. (1) A prompt to check the imaging report for being relevant to response to treatment is used. (2) The reports classified as eligible (in-scope) are categorized into reports mentioning RANO or RECIST using regular expressions. The prompts for data extraction are selected according to whether the imaging report was a PET scan, based on the report metadata (3). The prompts used for data extraction (4-7) are shown in \[PLACEHOLDER\].](images/eFigure3.png){#fig-prompt-rtt style="color: white;" width="13cm"}
+![This figure shows the how prompts for classification of response to treatment are chained. (1) A prompt to check the imaging report for being relevant to response to treatment is used. (2) The reports classified as eligible (in-scope) are categorized into reports mentioning RANO or RECIST using regular expressions. The prompts for data extraction are selected according to whether the imaging report was a PET scan, based on the report metadata (3). The prompts used for data extraction (4-7) are shown in Section @sec-response).](images/eFigure3.png){#fig-prompt-rtt style="color: white;" width="13cm"}
 
 {{< pagebreak >}}
 
@@ -882,7 +882,7 @@ boot_results_rtt <- map_dfr(boot_samples_rtt$splits, function(split) {
 }, .progress = FALSE)
 
 
-rtt_boot_summary <- boot_results_rtt |>
+rtt_boot_summary_2 <- boot_results_rtt |>
   as_tibble() |>
   # Group by pet_ct as well now
   group_by(value, grp, pet_ct) |> 
@@ -897,16 +897,16 @@ rtt_boot_summary <- boot_results_rtt |>
 dodge <- position_dodge(width = 0.5)
 
 # Determine order of 'value' based on Human performance on CT scans
-human_order_rtt <- rtt_boot_summary |>
+human_order_rtt <- rtt_boot_summary_2 |>
   filter(grp == "human", pet_ct == "CT") |> 
   arrange(point.estimate) |>
   pull(value) |>
   as.character()
 
-all_values_rtt <- rtt_boot_summary |> distinct(value) |> pull(value) |> as.character()
+all_values_rtt <- rtt_boot_summary_2 |> distinct(value) |> pull(value) |> as.character()
 
 # Create the plot
-rtt_boot_summary |>
+rtt_boot_summary_2 |>
   mutate(
     grp = factor(grp, levels = ord),
     value = factor(value, levels = c(human_order_rtt, setdiff(all_values_rtt, human_order_rtt)))
@@ -1635,6 +1635,43 @@ gt::gtsave(
 
 ## eTable 3
 
+```{r}
+#| echo: false
+#| tbl-cap: "Accuracy (%) with 95% bootstrap confidence intervals (1000 repetitions) for Response to Treatment classification by human extractors and LLMs. PET‑Scan partial and complete responses were combined into a single “Response” category."
+#| tbl-colwidths: [20, 20, 20, 20, 20]
+
+tbl_data_rtt <- rtt_boot_summary |>
+  mutate(
+    grp = factor(grp, levels = ord),
+    value = factor(value, levels = c(human_order_rtt, setdiff(all_values_rtt, human_order_rtt)))
+  ) |>
+  arrange(value, grp) |>
+  select(value, grp, point.estimate, conf.low, conf.high)
+
+# Build gt table similar to other eTables
+tbl_rtt <- tbl_data_rtt |>
+  gt(groupname_col = "value") |>
+  fmt_percent(
+    columns = c(point.estimate, conf.low, conf.high),
+    decimals = 1
+  ) |>
+  cols_merge(
+    columns = c(point.estimate, conf.low, conf.high),
+    pattern = "{1} ({2}–{3})"
+  ) |>
+  cols_label(
+    grp = "",
+    point.estimate = md("Accuracy <br> % (95% CI)")
+  ) |>
+  tab_options(data_row.padding = px(4))
+
+tbl_rtt
+```
+
+{{< pagebreak >}}
+
+## eTable 4
+
 ```{r tbl-ppv-npv-rtt}
 #| echo: false
 #| tbl-cap: "Sensitivity, Specificity, PPV, and NPV for response to treatment, when dichotomized into progression vs other, by human and LLMs."
@@ -2151,11 +2188,13 @@ Use these self-contained examples to guide classification logic.
 
 -   Do not consider any information about metastasis, which is from the case history ('Anamnese'). Only focus on what is seen in the current imaging exam.
 
+{{< pagebreak >}}
+
 ## Prompts
 
-These are prompts used in the classiciations pipelines. The prompts are better understood in the conext of the code. We encourage the reader to examine the code together with the prompts here \[placeholder\]!!!!!!
+These are prompts used in the classiciations pipelines. The prompts are better understood in the conext of the code. We encourage the reader to examine the code together with the prompts [here](https://github.com/scjohannes/llm-med-extraction).
 
-### Metastasis Classification
+### Metastasis Classification {#sec-metastasis}
 
 #### System Prompt
 
@@ -2272,7 +2311,7 @@ Output example JSON only for thorax region:
 }
 ```
 
-### Response to Treatment Classification
+### Response to Treatment Classification {#sec-response}
 
 System Prompt
 

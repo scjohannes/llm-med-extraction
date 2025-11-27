@@ -161,7 +161,29 @@ avg_predictions(m_acc3,by = "grp", type = "response", vcov = ~ ier_bk)
 avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
 ```
 
+## Interrate Agreement
 
+```{r}
+ira <- data |> 
+  filter(redcap_event_name == "Extraction 1" | redcap_event_name == "Extraction 2") |> 
+  pivot_wider(
+    id_cols = c(ier_bk, task, item),
+    names_from = redcap_event_name,
+    values_from = value
+  ) |> 
+  mutate(
+    agree = if_else(`Extraction 1` == `Extraction 2`, 1, 0)
+  )
+
+ira_summary <- ira |>
+  group_by(task) |> 
+  summarise(
+    agreement = mean(agree),
+    kappa     = irr::kappa2(cbind(`Extraction 1`, `Extraction 2`))$value
+  )
+
+
+```
 
 ## Table 1
 
