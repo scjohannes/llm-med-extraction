@@ -48,6 +48,121 @@ logs <- REDCapR::redcap_log_read(
 )
 ```
 
+## Themes
+
+```{r theme-for-figs}
+#| echo: false
+# Reusable theme for figs
+theme_medical <- function(base_size = 11, base_family = "sans") {
+  theme_minimal(base_size = base_size, base_family = base_family) +
+    theme(
+      panel.grid.major.x = element_line(),
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor   = element_blank(),
+      axis.title = element_text(face = "bold"),
+      axis.text  = element_text(color = "black"),
+      axis.line  = element_line(linewidth = 0.4),
+      axis.ticks = element_line(linewidth = 0.4),
+      legend.position = "bottom",
+      legend.direction = "horizontal",
+      plot.margin = margin(5.5, 7, 5.5, 5.5)
+    )
+}
+
+okabe_ito_named <- c(
+  human               = "#000000",
+  "gpt-oss:120b"      = "#E69F00",
+  "qwen3:32b"         = "#56B4E9",
+  "qwq:32b"           = "#009E73",
+  "mistral-small:24b" = "#0072B2",
+  "llama3.3:70b"      = "#D55E00"
+)
+
+ord <- c(
+  "human",
+  "gpt-oss:120b",
+  "qwen3:32b",
+  "qwq:32b",
+  "mistral-small:24b",
+  "llama3.3:70b")
+
+ord_legend    <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b","mistral-small:24b","llama3.3:70b")
+model_levels  <- setdiff(ord_legend, "human")
+contrast_lvls <- paste0(model_levels, " - human")
+
+shared_color <- scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE, name = "")
+shared_fill  <- scale_fill_manual( values = okabe_ito_named, breaks = ord_legend, drop = FALSE, name = "", guide = "none")
+diff_color   <- scale_color_manual(values = setNames(okabe_ito_named[model_levels], contrast_lvls),
+                                   breaks = contrast_lvls, labels = model_levels, drop = FALSE)
+```
+
+## Prepare Data
+```{r prep-data-analysis-optim-sample}
+#| echo: false
+full_sample <- data |> 
+  mutate(
+    human = if_else(!str_detect(redcap_event_name, "LLM"), 1, 0),
+    grp = case_when(
+      human == 1 ~ "human",
+      model == "llama3.3:70b-instruct-q5_K_M" | model == "llama3.3:70b" ~ "llama3.3:70b",
+      model == "mistral-small:24b-instruct-2501-q4_K_M" | model == "mistral-small:24b" ~ "mistral-small:24b",
+      model == "rndcalcle01.qwen3:32b" | model == "qwen3:32b" ~ "qwen3:32b",
+      model == "rndcalcle01.qwq:32b" | model == "qwq:32b" ~ "qwq:32b",
+      model == "gpt-oss:120b" ~ "gpt-oss:120b",
+    ),
+    grp = factor(grp, levels = c("human", "llama3.3:70b", "mistral-small:24b", "qwen3:32b", "qwq:32b",  "gpt-oss:120b")) )
+
+analysis_sample <- full_sample |> 
+  group_by(ier_bk) |> 
+  filter(any(training == "No")) |> 
+  ungroup()
+
+optim_sample <- full_sample |> 
+  group_by(ier_bk) |> 
+  filter(any(training == "Yes")) |> 
+  ungroup()
+```
+
+## Models
+```{r model-predictions-comparisons}
+#| echo: false
+#| output: false
+m_acc <- glm(
+    correct ~ grp * task,
+    data = analysis_sample  |> filter(task == "Metastasis" | task == "Response to Treatment"),
+    family = binomial(link = "logit")
+  )
+```
+
+```{r model-predictions-comparisons-Diagnosis-RadiologicallyTumorFree}
+#| echo: false
+#| output: false
+
+m_acc2 <- glm(
+    correct ~ grp * task,
+    data = analysis_sample  |> filter(task == "Diagnosis" | task == "Radiologically Tumor Free"),
+    family = binomial(link = "logit")
+  )
+
+avg_predictions(m_acc2, by = c("grp", "task"), type = "response", vcov = ~ier_bk)
+avg_comparisons(m_acc2, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
+```
+
+```{r model-predictions-comparisons-Overall}
+#| echo: false
+#| output: false
+
+m_acc3 <- glm(
+    correct ~ grp * task,
+    data = analysis_sample, 
+    family = binomial(link = "logit") )
+
+avg_predictions(m_acc3,by = "grp", type = "response", vcov = ~ ier_bk)
+avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
+```
+
+
+
 ## Table 1
 
 Generate Table 1 summarizing the characteristics of the 400 reports. All of this is based on the ground truth.
@@ -331,75 +446,13 @@ table1 <- gt(
 
 gtsave(
   table1,
-  filename = here::here("output", "oncology", "figures", "table1.docx")
+  filename = here::here("output", "oncology", "tables", "table1.docx")
 )
-
-table1
 ```
 
 {{< pagebreak >}}
 
 ## Figure 1
-
-```{r prep-data-analysis-optim-sample}
-#| echo: false
-full_sample <- data |> 
-  mutate(
-    human = if_else(!str_detect(redcap_event_name, "LLM"), 1, 0),
-    grp = case_when(
-      human == 1 ~ "human",
-      model == "llama3.3:70b-instruct-q5_K_M" | model == "llama3.3:70b" ~ "llama3.3:70b",
-      model == "mistral-small:24b-instruct-2501-q4_K_M" | model == "mistral-small:24b" ~ "mistral-small:24b",
-      model == "rndcalcle01.qwen3:32b" | model == "qwen3:32b" ~ "qwen3:32b",
-      model == "rndcalcle01.qwq:32b" | model == "qwq:32b" ~ "qwq:32b",
-      model == "gpt-oss:120b" ~ "gpt-oss:120b",
-    ),
-    grp = factor(grp, levels = c("human", "llama3.3:70b", "mistral-small:24b", "qwen3:32b", "qwq:32b",  "gpt-oss:120b")) )
-
-analysis_sample <- full_sample |> 
-  group_by(ier_bk) |> 
-  filter(any(training == "No")) |> 
-  ungroup()
-
-optim_sample <- full_sample |> 
-  group_by(ier_bk) |> 
-  filter(any(training == "Yes")) |> 
-  ungroup()
-```
-
-```{r theme-for-figs}
-#| echo: false
-# Reusable theme for figs
-theme_medical <- function(base_size = 11, base_family = "sans") {
-  theme_minimal(base_size = base_size, base_family = base_family) +
-    theme(
-      panel.grid.major.x = element_line(),
-      panel.grid.major.y = element_blank(),
-      panel.grid.minor   = element_blank(),
-      axis.title = element_text(face = "bold"),
-      axis.text  = element_text(color = "black"),
-      axis.line  = element_line(linewidth = 0.4),
-      axis.ticks = element_line(linewidth = 0.4),
-      legend.position = "bottom",
-      legend.direction = "horizontal",
-      plot.margin = margin(5.5, 7, 5.5, 5.5)
-    )
-}
-```
-
-```{r model-predictions-comparisons}
-#| echo: false
-#| output: false
-m_acc <- glm(
-    correct ~ grp * task,
-    data = analysis_sample  |> filter(task == "Metastasis" | task == "Response to Treatment"),
-    family = binomial(link = "logit")
-  )
-
-avg_predictions(m_acc, by = c("grp", "task"), type = "response", vcov = ~ier_bk)
-avg_comparisons(m_acc, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
-```
-
 
 ```{r fig-main-primary-endpoints}
 #| fig-width: 
@@ -408,23 +461,7 @@ avg_comparisons(m_acc, variable = "grp", by = "task", type = "response", vcov = 
 #| echo: false
 #| warning: false
 # -------- Palette & ordering (Okabe–Ito) ------------------------------------
-okabe_ito_named <- c(
-  human               = "#000000",
-  "gpt-oss:120b"      = "#E69F00",
-  "qwen3:32b"         = "#56B4E9",
-  "qwq:32b"           = "#009E73",
-  "mistral-small:24b" = "#0072B2",
-  "llama3.3:70b"      = "#D55E00"
-)
 
-ord_legend    <- c("human","gpt-oss:120b","qwen3:32b","qwq:32b","mistral-small:24b","llama3.3:70b")
-model_levels  <- setdiff(ord_legend, "human")
-contrast_lvls <- paste0(model_levels, " - human")
-
-shared_color <- scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE, name = "")
-shared_fill  <- scale_fill_manual( values = okabe_ito_named, breaks = ord_legend, drop = FALSE, name = "", guide = "none")
-diff_color   <- scale_color_manual(values = setNames(okabe_ito_named[model_levels], contrast_lvls),
-                                   breaks = contrast_lvls, labels = model_levels, drop = FALSE)
 
 # -------- Data for difference panels ----------------------------------------
 dfm <- avg_comparisons(
@@ -491,7 +528,7 @@ pA <- ggplot(pred_data_m, aes(x = grp, y = estimate, color = grp, fill = grp)) +
   shared_color + shared_fill +
   scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, 0.1)) +
   scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
-  labs(tag = "A)", x = NULL, y = "Probability of Correct Response", title = "Metastasis") +
+  labs(tag = "A", x = NULL, y = "Probability of Correct Response", title = "Metastasis") +
   theme_top
 
 pB <- ggplot(pred_data_rtt, aes(x = grp, y = estimate, color = grp, fill = grp)) +
@@ -504,7 +541,7 @@ pB <- ggplot(pred_data_rtt, aes(x = grp, y = estimate, color = grp, fill = grp))
   shared_color + shared_fill +
   scale_y_continuous(limits = c(0.5, 1), breaks = seq(0.5, 1, 0.1)) +
   scale_x_discrete(expand = expansion(add = c(0.6, 0.6))) +
-  labs(tag = "B)", x = NULL, y = NULL, title = "Response to Treatment") +
+  labs(tag = "B", x = NULL, y = NULL, title = "Response to Treatment") +
   theme_top
 
 
@@ -546,12 +583,12 @@ fig1 <- (pA + pB) +
 fig1_supp <- pC/ pD
 
 ggsave(
-  filename = here::here("output", "oncology", "figures", "full_fig_primary.png"),
+  filename = here::here("output", "oncology", "figures", "figure_1.png"),
   plot = fig1, width = 8, height = 8, dpi = 300
 )
 
 ggsave(
-  filename = here::here("output", "oncology", "figures", "full_fig_primary.svg"),
+  filename = here::here("output", "oncology", "figures", "figure_1.svg"),
   plot = fig1, width = 8, height = 8, dpi = 300
 )
 ```
@@ -559,87 +596,228 @@ ggsave(
 ## Table 2
 
 ```{r}
-ord <- c(
-  "human",
-  "gpt-oss:120b",
-  "qwen3:32b",
-  "qwq:32b",
-  "mistral-small:24b",
-  "llama3.3:70b")
+pred_data <- avg_predictions(
+  m_acc, by = c("grp", "task"), type = "response", vcov = ~ ier_bk
+) |>
+  as_tibble() |>
+  select(
+    task, 
+    grp, 
+    acc_est = estimate, 
+    acc_low = conf.low, 
+    acc_high = conf.high
+  )
 
-tab_data <- avg_comparisons(
+comp_data <- avg_comparisons(
   m_acc, variable = "grp", by = "task", type = "response",
   vcov = ~ ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.90
 ) |>
   as_tibble() |>
-  mutate(
-    grp = str_remove(contrast, " - human") |> factor(levels = ord),
-    # Pre-multiply p-value threshold logic if desired, or handle in gt
-  ) |>
-  arrange(task, grp) |>
-  select(task, grp, estimate, conf.low, conf.high, p.value.noninf)
-
-# 2. Build Table
-tab_data |>
-  gt(groupname_col = "task") |>
-  # Format the numbers
-  fmt_number(columns = c(estimate, conf.low, conf.high), decimals = 1,
-    scale_by = 100) |>
-  # Merge them into the specific pattern
-  cols_merge(
-    columns = c(estimate, conf.low, conf.high),
-    pattern = "{1} ({2} to {3})"
-  ) |>
-  # Handle P-values (using scales makes this very concise)
-  fmt(
-    columns = p.value.noninf,
-    fns = scales::label_pvalue(accuracy = 0.001) 
-  ) |>
-  # Labels and Styling
-  cols_label(
-    grp = "Contrast",
-    estimate = "Difference in Accuracy (90% CI)",
-    p.value.noninf = "P-value"
-  ) |>
-  # Add " - human" back visually without mutating data
-  text_transform(
-    locations = cells_body(columns = grp),
-    fn = function(x) paste(x, "- human")
-  ) |>
-  tab_options(data_row.padding = px(4)) |>
-  gtsave(filename = here::here("output", "oncology", "figures", "table_2.docx"))
-```
-
-## Figure 2
-
-```{r model-predictions-comparisons-Diagnosis-RadiologicallyTumorFree}
-#| echo: false
-#| output: false
-
-m_acc2 <- glm(
-    correct ~ grp * task,
-    data = analysis_sample  |> filter(task == "Diagnosis" | task == "Radiologically Tumor Free"),
-    family = binomial(link = "logit")
+  mutate(grp = str_remove(contrast, " - human")) |>
+  select(
+    task, 
+    grp, 
+    diff_est = estimate, 
+    diff_low = conf.low, 
+    diff_high = conf.high, 
+    p_val = p.value.noninf
   )
 
-avg_predictions(m_acc2, by = c("grp", "task"), type = "response", vcov = ~ier_bk)
-avg_comparisons(m_acc2, variable = "grp", by = "task", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
+# 3. Join and Order
+tab_data <- pred_data |>
+  left_join(comp_data, by = c("task", "grp")) |>
+  mutate(grp = factor(grp, levels = ord)) |>
+  arrange(task, grp)
+
+# 4. Build Table
+final_table <- tab_data |>
+  gt(groupname_col = "task") |>
+  
+  # 1. FORMATTING DATA ==============================================
+  # Accuracy: Percent with En-dash for CI
+  fmt_percent(
+    columns = c(acc_est, acc_low, acc_high),
+    decimals = 1
+  ) |>
+  cols_merge(
+    columns = c(acc_est, acc_low, acc_high),
+    pattern = "{1} ({2}–{3})" # Uses en-dash
+  ) |>
+  
+  # Difference: Number (scaled to pp) with proper Minus Sign
+  fmt_number(
+    columns = c(diff_est, diff_low, diff_high),
+    decimals = 1,
+    scale_by = 100,
+    pattern = "{x}"
+  ) |>
+  cols_merge(
+    columns = c(diff_est, diff_low, diff_high),
+    pattern = "{1} ({2} to {3})"
+  ) |>
+
+  # P-values: Reverted to your original preference (standard 0.001 format)
+  fmt(
+    columns = p_val,
+    fns = scales::label_pvalue(accuracy = 0.001) 
+  ) |>
+
+  # 2. HANDLING THE REFERENCE ROW ===================================
+  # Clean up the "Human" row to say [Reference] instead of empty/NA
+  sub_missing(
+    columns = c(diff_est, p_val),
+    missing_text = ""
+  ) |>
+  text_transform(
+    locations = cells_body(
+      columns = diff_est, 
+      rows = grp == "human"
+    ),
+    fn = function(x) "[Reference]"
+  ) |>
+  
+  # 3. HEADER STRUCTURE =============================================
+  # Rename columns using Markdown for line breaks and bolding
+  cols_label(
+    grp = "Model",
+    acc_est = md("% (95% CI)"),
+    diff_est = md("Percentage Points (90% CI)"),
+    p_val = md("Noninferiority")
+  ) |>
+  
+  # Add the Spanners (The top-level headers)
+  tab_spanner(
+    label = md("**Accuracy**"),
+    columns = c(acc_est)
+  ) |>
+  tab_spanner(
+    label = md("**Difference from Human**"),
+    columns = c(diff_est)
+  ) |>
+    tab_spanner(
+    label = md("**P Value**"),
+    columns = c(p_val)
+  ) |>
+
+  # 4. STYLING & LAYOUT =============================================
+  cols_align(
+    align = "center",
+    columns = c(acc_est, diff_est, p_val)
+  ) |>
+  cols_align(
+    align = "left",
+    columns = grp
+  ) |>
+  
+  # Font and Spacing settings
+  opt_table_font(
+    font = list(google_font("Arimo"), "Arial", "Helvetica")
+  ) |>
+  tab_options(
+    table.font.size = px(12),
+    heading.title.font.size = px(14),
+    column_labels.font.weight = "bold",
+    table_body.hlines.style = "none",
+    data_row.padding = px(6)
+  )
+
+gtsave(final_table, filename = here::here("output", "oncology", "tables", "table_2.docx"))
 ```
 
-```{r model-predictions-comparisons-Overall}
+## Figure 3
+
+Accuracy by task (diagnosis, tumorfree) and group
+
+```{r fig-acc-secondary-endpoints}
+#| fig-width: 8
+#| fig-height: 6
+#| fig-cap: "Accuracy by Task and Group (Human vs LLM)"
 #| echo: false
-#| output: false
+#| warning: false
 
-m_acc3 <- glm(
-    correct ~ grp * task,
-    data = analysis_sample, 
-    family = binomial(link = "logit") )
+# --- PLOT 1: Diagnosis -------------------------------------------------------
+p1 <- plot_predictions(m_acc2, newdata = analysis_sample |> filter(task == "Diagnosis") |> mutate(grp = factor(grp, levels = ord)), 
+                       by = c("task", "grp"), type = "response", vcov = ~ier_bk) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = seq(0, 1, by = 0.2)) +
+  scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
+  scale_fill_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
+  labs(x = "Diagnosis", y = "Probability of Correct Response", color = "") +
+  theme_medical() +
+  theme(
+    panel.grid.major.y = element_line(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_blank()
+  )
 
-avg_predictions(m_acc3,by = "grp", type = "response", vcov = ~ ier_bk)
-avg_comparisons(m_acc3, variable = "grp", type = "response", vcov = ~ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9)
+# --- PLOT 2: Radiologically Tumor Free --------------------------------------
+p2 <- plot_predictions(m_acc2, newdata = analysis_sample |> filter(task == "Radiologically Tumor Free") |> mutate(grp = factor(grp, levels = ord)), 
+                       by = c("task", "grp"), type = "response", vcov = ~ier_bk) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = seq(0, 1, by = 0.2)) +
+  scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
+  scale_fill_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
+  labs(x = "Radiologically Tumor Free", y = NULL, color = "") +
+  theme_medical() +
+  theme(
+    panel.grid.major.y = element_line(),
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_blank()
+  )
+# --- PLOT 3: Overall (single x level "overall") ------------------------------
+ap <- avg_predictions(
+  m_acc3,
+  by   = "grp",
+  type = "response",
+  vcov = ~ ier_bk
+) |>
+  mutate(xlab = "overall") |> mutate(grp = factor(grp, levels = ord))  
+
+pd <- position_dodge(width = 0.2)
+
+p3 <- ggplot(ap, aes(x = xlab, y = estimate, color = grp)) +  
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high), position = pd, size = 0.5, linewidth = 0.5) +
+  scale_x_discrete(limits = "overall") +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = seq(0, 1, by = 0.2)) +
+  scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
+  scale_fill_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
+  labs(x = "Overall", y = NULL, color = "") +
+  theme_medical() +
+  theme(
+    panel.grid.major.y = element_line(),
+    panel.grid.major.x = element_blank(),
+        axis.text.x = element_blank(),
+    legend.position = ""
+  )
+# --- COMBINE ----------------------------------------------------------------
+combined_Acc <- p1 + p2 + p3 + plot_annotation(tag_levels = "A") + 
+  plot_layout(guides = "collect") + 
+  plot_annotation(theme = theme(legend.position = "bottom"))
+
+# Preview in the document
+combined_Acc
+
+# --- SAVE ---------------------------------------------------------------------
+ggsave(
+  filename = here::here("output", "oncology", "figures", "secondary_accuracy.png"),
+  plot = combined_Acc,
+  width = 8, height = 7, dpi = 300
+)
+
+ggsave(
+  filename = here::here("output", "oncology", "figures", "secondary_accuracy.svg"),
+  plot = combined_Acc,
+  width = 8, height = 7, dpi = 300
+)
 ```
 
-#### Diffrence plot: secondary endpoints
+## Figure 4
+
+Difference vs. human for secondary endpoints
 
 ```{r fig-diff-secondary-endpoints}
 #| echo: false
@@ -673,12 +851,12 @@ dfover <- avg_comparisons(
   m_acc3,
   variable = "grp", type = "response",
   vcov = ~ ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.9
-) |> 
+) |>
   data.frame()
 
-dfd$contrast   <- factor(dfd$contrast,   levels = contrast_lvls)
-dfrtf$contrast <- factor(dfrtf$contrast, levels = contrast_lvls)
-dfover$contrast<- factor(dfover$contrast,levels = contrast_lvls)
+dfd$contrast   <- factor(dfd$contrast,   levels = rev(contrast_lvls))
+dfrtf$contrast <- factor(dfrtf$contrast, levels = rev(contrast_lvls))
+dfover$contrast<- factor(dfover$contrast,levels = rev(contrast_lvls))
 
 ## 2) LIMITS ------------------------------------------------------
 lims <- range(
@@ -735,86 +913,11 @@ ggsave(
   plot = combined_sec,
   width = 8, height = 10.5, dpi = 300
 )
-```
 
-#### Accuracy by task (diagnosis, tumorfree) and group
-
-```{r fig-acc-secondary-endpoints}
-#| fig-width: 8
-#| fig-height: 6
-#| fig-cap: "Accuracy by Task and Group (Human vs LLM)"
-#| echo: false
-#| warning: false
-
-# --- PLOT 1: Diagnosis -------------------------------------------------------
-p1 <- plot_predictions(m_acc2, newdata = analysis_sample |> filter(task == "Diagnosis"), 
-                       by = c("task", "grp"), type = "response", vcov = ~ier_bk) +
-  scale_y_continuous(
-    limits = c(0, 1),
-    breaks = seq(0, 1, by = 0.2)) +
-  scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
-  scale_fill_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
-  labs(x = "Diagnosis", y = "Probability of Correct Response", color = "") +
-  theme_medical() +
-  theme(
-    panel.grid.major.y = element_line(),
-    panel.grid.major.x = element_blank(),
-    axis.text.x = element_blank()
-  )
-
-# --- PLOT 2: Radiologically Tumor Free --------------------------------------
-p2 <- plot_predictions(m_acc2, newdata = analysis_sample |> filter(task == "Radiologically Tumor Free"), 
-                       by = c("task", "grp"), type = "response", vcov = ~ier_bk) +
-  scale_y_continuous(
-    limits = c(0, 1),
-    breaks = seq(0, 1, by = 0.2)) +
-  scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
-  scale_fill_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
-  labs(x = "Radiologically Tumor Free", y = NULL, color = "") +
-  theme_medical() +
-  theme(
-    panel.grid.major.y = element_line(),
-    panel.grid.major.x = element_blank(),
-    axis.text.x = element_blank()
-  )
-# --- PLOT 3: Overall (single x level "overall") ------------------------------
-ap <- avg_predictions(
-  m_acc3,
-  by   = "grp",
-  type = "response",
-  vcov = ~ ier_bk
-) |>
-  mutate(xlab = "overall")   
-
-pd <- position_dodge(width = 0.2)
-
-p3 <- ggplot(ap, aes(x = xlab, y = estimate, color = grp)) +  
-  geom_pointrange(aes(ymin = conf.low, ymax = conf.high), position = pd, size = 0.5, linewidth = 0.5) +
-  scale_x_discrete(limits = "overall") +
-  scale_y_continuous(
-    limits = c(0, 1),
-    breaks = seq(0, 1, by = 0.2)) +
-  scale_color_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
-  scale_fill_manual(values = okabe_ito_named, breaks = ord_legend, drop = FALSE) +
-  labs(x = "Overall", y = NULL, color = "") +
-  theme_medical() +
-  theme(
-    panel.grid.major.y = element_line(),
-    panel.grid.major.x = element_blank(),
-        axis.text.x = element_blank(),
-    legend.position = ""
-  )
-# --- COMBINE ----------------------------------------------------------------
-combined_Acc <- p1 + p2 + p3 + plot_annotation(tag_levels = "A") + plot_layout(guides = "collect")  & theme(legend.position = "bottom")
-
-# Preview in the document
-combined_Acc
-
-# --- SAVE ---------------------------------------------------------------------
 ggsave(
-  filename = here::here("output", "oncology", "figures", "secondary_accuracy.png"),
-  plot = combined_Acc,
-  width = 8, height = 7, dpi = 300
+  filename = here("output", "oncology", "figures", "secondary_contrast.svg"),
+  plot = combined_sec,
+  width = 8, height = 10.5, dpi = 300
 )
 ```
 
@@ -875,6 +978,12 @@ bar_meta
 
 ggsave(
   filename = here::here("output", "oncology", "figures", "bar_plot_meta.png"),
+  plot = bar_meta,
+  width = 8, height = 7, dpi = 300
+)
+
+ggsave(
+  filename = here::here("output", "oncology", "figures", "bar_plot_meta.svg"),
   plot = bar_meta,
   width = 8, height = 7, dpi = 300
 )

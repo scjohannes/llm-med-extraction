@@ -1,10 +1,10 @@
 library(tidyverse)
 library(MedOnko)
 
-source("functions/clean_imaging_report_text.R")
+source("./functions/clean_imaging_report_text.R")
 
 data_raw <- read_csv(
-  "data/reports_2025-06-13.csv"
+  "./data/reports_2025-06-13.csv"
 )
 set.seed(1234)
 

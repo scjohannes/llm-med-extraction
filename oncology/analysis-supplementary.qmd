@@ -7,28 +7,10 @@ date: today
 execute: 
   echo: false
 format: 
-  typst:
-    papersize: a4
-    margin:
-      x: 2cm
-      y: 2.5cm
+  docx:
+    reference-doc: jama-reference.docx
     toc: true
-    columns: 1
     tbl-cap-location: bottom
-    include-in-header:
-      text: |
-        // --- Global Body Text Settings ---
-        // Times New Roman, 10pt, Single Spaced (leading roughly 0.65em)
-        #set text(font: "Times New Roman", size: 10pt)
-        #set par(leading: 0.65em, justify: true) 
-
-        // --- Table & Figure Settings ---
-        // Tables: Arial, 9pt
-        #show table: set text(font: "Arial", size: 9pt)
-        
-        // Captions: Arial, 8pt, Single Spaced
-        #show figure.caption: set text(font: "Arial", size: 8pt)
-        #show figure.caption: set par(leading: 0.5em)
 ---
 
 {{< pagebreak >}}
@@ -52,7 +34,9 @@ library(ggdist)
 ```{r}
 #| echo: false
 #| output: false
-boot_R <- 1000
+
+set.seed(71237)
+boot_R <- 10
 ```
 
 ```{r cache-setup}
@@ -175,6 +159,38 @@ m_acc2 <- glm(
 m_acc3 <- glm(
     correct ~ grp * task,
     data = data_test, 
+    family = binomial(link = "logit"))
+```
+
+```{r}
+data_rtt_combined <- data_test |>
+  filter(task == "Response to Treatment") |>
+  mutate(
+    # 1. Standardize VALUE: Merge Partial/Complete into "Response"
+    # (This affects PET rows; Non-PET rows are already "Response")
+    value = case_when(
+      value %in% c("Complete Response", "Partial Response") ~ "Response",
+      TRUE ~ value
+    ),
+    
+    # 2. Standardize TRUTH: Must match the logic above
+    truth = case_when(
+      truth %in% c("Complete Response", "Partial Response") ~ "Response",
+      TRUE ~ truth
+    ),
+    
+    # 3. Recalculate CORRECT based on new standardized definitions
+    correct = if_else(value == truth, 1, 0),
+    
+    # 4. Convert pet_ct to a labeled factor for cleaner plots/tables later
+    pet_ct = factor(pet_ct, levels = c(FALSE, TRUE), labels = c("Non-PET", "PET"))
+  )
+```
+
+```{r}
+m_rtt <- glm(
+    correct ~ grp * (value + pet_ct),
+    data = data_rtt_combined, 
     family = binomial(link = "logit"))
 ```
 
@@ -336,6 +352,10 @@ plot_comparisons(
   type = "response",
   vcov = ~ier_bk
 ) +
+  scale_color_manual(values = setNames(okabe_ito_named[model_levels], model_levels),
+                     breaks = model_levels,
+                     labels = model_levels,
+                     name = "") +
   labs(
     color = "LLM",
     x = "",
@@ -505,7 +525,7 @@ boot_results <- map_dfr(boot_samples$splits, function(split) {
     family = binomial(link = "logit")
   )
   avg_predictions(mod, by = c("value", "grp"), vcov = FALSE)
-}, .progress = TRUE)
+}, .progress = FALSE)
 
 # Calculate bootstrap confidence intervals
 diagnosis_boot_results <- boot_results |>
@@ -518,7 +538,6 @@ diagnosis_boot_results <- boot_results |>
     conf.high = quantile(estimate, 0.975)
   )
 
-# palette (high contrast, colorblind-friendly-ish)
 pal_models <- c(
   human               = "#000000",
   "gpt-oss:120b"      = "#E69F00",
@@ -673,7 +692,7 @@ metrics_long |>
   geom_pointrange(
     aes(ymin = conf.low, ymax = conf.high),
     position = dodge,
-    size = 0.3
+    size = 0.5
   ) +
   scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.25), labels = percent) +
   scale_color_manual(values = pal_models, breaks = ord, name = "") +
@@ -769,6 +788,154 @@ ggsave(
 ## eFigure 9
 
 ```{r}
+#| fig-width: 10
+#| fig-height: 6
+#| fig-cap: "Accuracy of Human Extractors and LLMs for Response to Treatment Classification. Point estimates with boostrapped 95% confidence intervals (1000 repetitions) are shown. The sample size of PET-CTs was too small to accurately estimate accuracy for partial response and complete response separately; these two categories were therefore merged into a single 'Response' category."
+boot_samples_rtt <- group_bootstraps(data_rtt_combined, group = ier_bk, times = boot_R)
+
+boot_results_rtt <- map_dfr(boot_samples_rtt$splits, function(split) {
+  boot_data <- analysis(split)
+  
+  # Fit the model requested: grp * (value + pet_ct)
+  mod <- glm(
+    correct ~ grp * (value + pet_ct),
+    data = boot_data, 
+    family = binomial(link = "logit")
+  )
+  
+  # Calculate predictions
+  # Crucial: We must include "pet_ct" in the 'by' argument here
+  avg_predictions(mod, by = c("value", "grp"), vcov = FALSE)
+}, .progress = FALSE)
+
+
+rtt_boot_summary <- boot_results_rtt |>
+  as_tibble() |>
+  # Group by pet_ct as well now
+  group_by(value, grp) |> 
+  summarise(
+    point.estimate = mean(estimate),
+    std.error = sd(estimate),
+    conf.low = quantile(estimate, 0.025),
+    conf.high = quantile(estimate, 0.975),
+    .groups = "drop"
+  )
+
+dodge <- position_dodge(width = 0.5)
+
+# Determine order of 'value' based on Human performance on CT scans
+human_order_rtt <- rtt_boot_summary |>
+  filter(grp == "human") |> 
+  arrange(point.estimate) |>
+  pull(value) |>
+  as.character()
+
+all_values_rtt <- rtt_boot_summary |> distinct(value) |> pull(value) |> as.character()
+
+# Create the plot
+rtt_boot_summary |>
+  mutate(
+    grp = factor(grp, levels = ord),
+    value = factor(value, levels = c(human_order_rtt, setdiff(all_values_rtt, human_order_rtt)))
+  ) |>
+  ggplot(aes(x = value, y = point.estimate, color = grp, group = grp)) +
+  geom_pointrange(
+    aes(ymin = conf.low, ymax = conf.high),
+    position = dodge,
+    size = 0.5
+  ) +
+  # facet_wrap(~pet_ct) + 
+  scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
+  scale_color_manual(values = okabe_ito_named, breaks = ord, name = "") +
+  labs(
+    x = "", 
+    y = "Accuracy"
+  ) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor.y = element_blank(), # Cleaner look for flip plots
+    strip.text = element_text(face = "bold", size = 11)
+  )
+```
+
+## eFigure 10
+
+```{r}
+#| fig-width: 10
+#| fig-height: 6
+#| fig-cap: "Accuracy of Human Extractors and LLMs for Response to Treatment Classification, Stratified by Imaging Modality (CT vs. PET/CT) and Classification. Point estimates with boostrapped 95% confidence intervals (1000 repetitions) are shown. The sample size of PET-CTs was too small to accurately estimate accuracy for partial response and complete response separately; these two categories were therefore merged into a single 'Response' category."
+boot_samples_rtt <- group_bootstraps(data_rtt_combined, group = ier_bk, times = boot_R)
+
+boot_results_rtt <- map_dfr(boot_samples_rtt$splits, function(split) {
+  boot_data <- analysis(split)
+  
+  # Fit the model requested: grp * (value + pet_ct)
+  mod <- glm(
+    correct ~ grp * (value + pet_ct),
+    data = boot_data, 
+    family = binomial(link = "logit")
+  )
+  
+  # Calculate predictions
+  # Crucial: We must include "pet_ct" in the 'by' argument here
+  avg_predictions(mod, by = c("value", "grp", "pet_ct"), vcov = FALSE)
+}, .progress = FALSE)
+
+
+rtt_boot_summary <- boot_results_rtt |>
+  as_tibble() |>
+  # Group by pet_ct as well now
+  group_by(value, grp, pet_ct) |> 
+  summarise(
+    point.estimate = mean(estimate),
+    std.error = sd(estimate),
+    conf.low = quantile(estimate, 0.025),
+    conf.high = quantile(estimate, 0.975),
+    .groups = "drop"
+  )
+
+dodge <- position_dodge(width = 0.5)
+
+# Determine order of 'value' based on Human performance on CT scans
+human_order_rtt <- rtt_boot_summary |>
+  filter(grp == "human", pet_ct == "CT") |> 
+  arrange(point.estimate) |>
+  pull(value) |>
+  as.character()
+
+all_values_rtt <- rtt_boot_summary |> distinct(value) |> pull(value) |> as.character()
+
+# Create the plot
+rtt_boot_summary |>
+  mutate(
+    grp = factor(grp, levels = ord),
+    value = factor(value, levels = c(human_order_rtt, setdiff(all_values_rtt, human_order_rtt)))
+  ) |>
+  ggplot(aes(x = value, y = point.estimate, color = grp, group = grp)) +
+  geom_pointrange(
+    aes(ymin = conf.low, ymax = conf.high),
+    position = dodge,
+    size = 0.5
+  ) +
+  facet_wrap(~pet_ct) + 
+  scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
+  scale_color_manual(values = okabe_ito_named, breaks = ord, name = "") +
+  labs(
+    x = "", 
+    y = "Accuracy"
+  ) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor.y = element_blank(), # Cleaner look for flip plots
+    strip.text = element_text(face = "bold", size = 11)
+  )
+```
+
+{{< pagebreak >}}
+
+## eFigure 11
+
+```{r}
 #| echo: false
 #| output: false
 prog <- data_test |>
@@ -838,11 +1005,11 @@ ggsave(
 
 {{< pagebreak >}}
 
-## eFigure 10
+## eFigure 12
 
-```{r fig-main-primary-endpoints}
+```{r fig-bayesian-1}
 #| fig-width: 8
-#| fig-height: 11
+#| fig-height: 9.5
 #| fig-cap: "Bayesian reanalysis of the accuracy for classification of metastasis and response to treatment. Top panels (A, B) show the posterior distributions of accuracy (probability of correct response) for humans and each LLM across the two primary tasks with 66% and 95% credible intervals. Bottom panels (C, D) show the posterior distributions of the contrasts (LLM minus human) and 90% credible intervals for each LLM compared to humans, with the non-inferiority margin indicated by the solid red line at -0.05."
 #| echo: false
 #| warning: false
@@ -1009,9 +1176,9 @@ ggsave(
 
 {{< pagebreak >}}
 
-## eFigure 11
+## eFigure 13
 
-```{r fig-diff-secondary-endpoints}
+```{r fig-diff-bayes}
 #| echo: false
 #| warning: false
 #| fig-cap: "Bayesian reanalysis of contrasts (LLM minus human) for secondary endpoints (Diagnosis, Radiologically Tumor Free, Overall Accuracy); posterior distributions with 90% credible intervals shown."
@@ -1135,9 +1302,9 @@ ggsave(
 
 {{< pagebreak >}}
 
-## eFigure 12
+## eFigure 14
 
-```{r fig-acc-secondary-endpoints}
+```{r fig-acc-bayes}
 #| fig-width: 8
 #| fig-height: 6
 #| fig-cap: "Bayesian reanalysis of accuracy (probability of correct response) for secondary endpoints (Diagnosis, Radiologically Tumor Free, Overall Accuracy); posterior distributions with 66% and 95% credible intervals shown."
@@ -1254,107 +1421,6 @@ ggsave(
 
 ## eTable 1
 
-```{r tbl-acc-primary-endpoints}
-#| tbl-cap: "Accuracy with 95% confidence intervals for metastasis status and reponse to treatment, by human extractors and LLMs, along with comparisons to human performance with 90% confidence intervals."
-#| echo: false
-
-pred_data <- avg_predictions(
-  m_primary_outcome, by = c("grp", "task"), type = "response", vcov = ~ ier_bk
-) |>
-  as_tibble() |>
-  select(
-    task, 
-    grp, 
-    acc_est = estimate, 
-    acc_low = conf.low, 
-    acc_high = conf.high
-  )
-
-comp_data <- avg_comparisons(
-  m_primary_outcome, variable = "grp", by = "task", type = "response",
-  vcov = ~ ier_bk, equivalence = c(-0.05, Inf), conf_level = 0.90
-) |>
-  as_tibble() |>
-  mutate(grp = str_remove(contrast, " - human")) |>
-  select(
-    task, 
-    grp, 
-    diff_est = estimate, 
-    diff_low = conf.low, 
-    diff_high = conf.high, 
-    p_val = p.value.noninf
-  )
-
-# 3. Join and Order
-tab_data <- pred_data |>
-  left_join(comp_data, by = c("task", "grp")) |>
-  mutate(grp = factor(grp, levels = ord)) |>
-  arrange(task, grp)
-
-# 4. Build Table
-tab_data |>
-  gt(groupname_col = "task") |>
-  
-  # --- Formatting: Accuracy (Percent) ---
-  fmt_percent(
-    columns = c(acc_est, acc_low, acc_high),
-    decimals = 1 # Matches your %.0f preference (change to 1 if needed)
-  ) |>
-  cols_merge(
-    columns = c(acc_est, acc_low, acc_high),
-    pattern = "{1} ({2}–{3})" # En-dash separator
-  ) |>
-  
-  # --- Formatting: Difference (Percentage Points) ---
-  fmt_number(
-    columns = diff_est,
-    decimals = 1,
-    scale_by = 100,
-    force_sign = TRUE
-  ) |>
-  fmt_number(
-    columns = c(diff_low, diff_high),
-    decimals = 1,
-    scale_by = 100
-  ) |>
-  cols_merge(
-    columns = c(diff_est, diff_low, diff_high),
-    pattern = "{1} ({2} to {3})"
-  ) |>
-  
-  # --- Formatting: P-values ---
-  fmt(
-    columns = p_val,
-    fns = scales::label_pvalue(accuracy = 0.001)
-  ) |>
-  
-  # --- Cleanup: Handling the "Human" Reference Row ---
-  # The join created NAs for comparison cols. We replace those with empty strings.
-  sub_missing(
-    columns = c(diff_est, p_val), 
-    missing_text = ""
-  ) |>
-  text_transform(
-    locations = cells_body(
-      columns = c(diff_est, p_val),
-      rows = grp == "human"
-    ),
-    fn = function(x) ""
-  ) |>
-  # --- Labels and Layout ---
-  cols_label(
-    grp = "",
-    acc_est = "Accuracy (95% CI)",
-    diff_est = "Difference (pp) (90% CI)",
-    p_val = "P-value NI"
-  ) |>
-  tab_options(data_row.padding = px(4))
-```
-
-{{< pagebreak >}}
-
-## eTable 2
-
 ```{r}
 #| tbl-cap: "Accuracy with 95% confidence intervals for diagnosis, radiological absence of tumor, and across all tasks, by human extractors and LLMs, along with comparisons to human performance with 90% confidence intervals."
 
@@ -1438,9 +1504,9 @@ pred_tbl_2 <- tab_data |>
   # --- Labels ---
   cols_label(
     grp = "",
-    acc_est = "Accuracy (95% CI)",
-    diff_est = "Difference (pp) (90% CI)", # Updated label to reflect mixed CIs
-    p_val = "P-value NI"
+    acc_est = md("Accuracy <br> % (95% CI)"),
+    diff_est = md("Difference <br> Percentage Points (90% CI)"), # Updated label to reflect mixed CIs
+    p_val = md("P Value <br> Noninferiority")
   ) |>
   tab_options(data_row.padding = px(4))
 
@@ -1449,11 +1515,12 @@ pred_tbl_2
 
 {{< pagebreak >}}
 
-## eTable 3
+## eTable 2
 
 ```{r tbl-ppv-npv-meta}
 #| echo: false
 #| tbl-cap: "Sensitivity, Specificity, PPV, and NPV for Metastasis Classification by Human Extractors and LLMs"
+#| tbl-colwidths: [20, 20, 20, 20, 20]
 
 # --- 1) Subset to Metastasis -------------------------------------------------
 dat_meta <- data_test |>
@@ -1548,7 +1615,10 @@ tbl_metrics <- gt(metrics_all) |>
     NPV         = "NPV (95% CI)"
   ) |>
   cols_align(align = "center", columns = c(Sensitivity, Specificity, PPV, NPV)) |>
-  tab_options(data_row.padding = px(4))
+  tab_options(
+    data_row.padding = px(4),
+    table.width = pct(100) 
+  )
 
 # Preview
 tbl_metrics
@@ -1563,11 +1633,13 @@ gt::gtsave(
 
 {{< pagebreak >}}
 
-## eTable 4
+## eTable 3
 
 ```{r tbl-ppv-npv-rtt}
 #| echo: false
 #| tbl-cap: "Sensitivity, Specificity, PPV, and NPV for response to treatment, when dichotomized into progression vs other, by human and LLMs."
+#| tbl-colwidths: [20, 20, 20, 20, 20]
+
 # --------------------------
 # A) Sensitivity / Specificity (bootstrapped) for Response to Treatment
 # --------------------------
@@ -1697,7 +1769,10 @@ tbl_prog_metrics <- gt(metrics_prog) |>
     NPV         = "NPV (95% CI)"
   ) |>
   cols_align("center", c(Sensitivity, Specificity, PPV, NPV)) |>
-  tab_options(data_row.padding = px(4))
+  tab_options(
+    data_row.padding = px(4),
+    table.width = pct(100) 
+  )
 
 # Preview
 tbl_prog_metrics
