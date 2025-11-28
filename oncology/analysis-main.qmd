@@ -242,12 +242,11 @@ tbl_age <- baseline_data |>
     IQR_low = quantile(age, 0.25),
     IQR_high= quantile(age, 0.75)
   ) |> 
-  mutate(
-    Value = glue(
-      "{mean |> round(1)}±{round(sd, digits = 1)}"),
-    Variable = "Patient Characteristics" ,
-    Category = "Age — yr"
-  ) |> 
+   mutate(
+    Value    = glue("{round(mean, 2)} ({round(sd, 2)})"),
+    Variable = "Patient Characteristics",
+    Category = "Age, mean (SD), y"
+  ) |>
   select(Value, Variable, Category)
 
 tbl_sex <- baseline_data |> 
@@ -269,24 +268,104 @@ tbl_sex <- baseline_data |>
 What were the three most common primary diagnoses (plus other) among the 400 reports?
 
 ```{r top3-diagnosis}
+# #| echo: false
+# #| output: false
+# # prep for table 1 - three most common diagnoses + other
+# diag_top4_other <- data |>
+#   filter(!str_detect(redcap_event_name, "LLM")) |> 
+#   filter(task == "Diagnosis") |>
+#   distinct(ier_bk, truth) |>
+#   count(truth, sort = TRUE, name = "n") |>
+#   (\(df) {
+#     top4 <- slice_head(df, n = 4)
+#     other_n <- sum(df$n) - sum(top4$n)
+#     out <- if (other_n > 0) bind_rows(top4, tibble(truth = "Other*", n = other_n)) else top4
+#     out |>
+#       mutate(
+#         pct   = round(n / sum(df$n), digits = 2),
+#         Value = glue::glue("{n} ({scales::percent(pct)})")
+#       )
+#   })() |>
+#   mutate(
+#     Variable = "Primary Diagnosis",
+#     Category = truth,
+#     Value,
+#     .keep = "none"
+#   )
+
+# diag_top4_other
+```
+
+```{r top4-diagnosis}
 #| echo: false
 #| output: false
-# prep for table 1 - three most common diagnoses + other
-diag_top4_other <- data |>
+
+gi_dx <- c(
+  "Gastric Cancer",
+  "Esophageal Cancer",
+  "Pancreatic Cancer",
+  "Cholangiocarcinoma",
+  "Hepatocellular Carcinoma",
+  "Small Bowel Cancer",
+  "Colorectal Cancer"
+)
+
+diag_counts_recoded <- data |>
+  filter(!str_detect(redcap_event_name, "LLM")) |> 
+  filter(task == "Diagnosis") |>
+  distinct(ier_bk, truth) |>
+  mutate(
+    truth_recoded = if_else(
+      truth %in% gi_dx,
+      "Gastrointestinal tumors",
+      truth
+    )
+  ) |>
+  count(truth_recoded, sort = TRUE, name = "n")
+
+diag_top4_other2 <- diag_counts_recoded |>
+  (\(df) {
+    top4   <- slice_head(df, n = 4)
+    other_n <- sum(df$n) - sum(top4$n)
+
+    out <- if (other_n > 0) {
+      bind_rows(
+        top4,
+        tibble(truth_recoded = "Other*", n = other_n)
+      )
+    } else {
+      top4
+    }
+
+    out |>
+      mutate(
+        pct   = round(n / sum(df$n), digits = 2),
+        Value = glue::glue("{n} ({percent(pct)})")
+      )
+  })() |>
+  mutate(
+    Variable = "Primary Diagnosis",
+    Category = truth_recoded,
+    Value,
+    .keep = "none"
+  )
+
+diag_top4_other2
+```
+```{r diag_all}
+#| echo: false
+#| output: false
+
+# diag_all: overview of all primary diagnoses with counts and percentage of patients.
+diag_all <- data |>
   filter(!str_detect(redcap_event_name, "LLM")) |> 
   filter(task == "Diagnosis") |>
   distinct(ier_bk, truth) |>
   count(truth, sort = TRUE, name = "n") |>
-  (\(df) {
-    top4 <- slice_head(df, n = 4)
-    other_n <- sum(df$n) - sum(top4$n)
-    out <- if (other_n > 0) bind_rows(top4, tibble(truth = "Other*", n = other_n)) else top4
-    out |>
-      mutate(
-        pct   = round(n / sum(df$n), digits = 2),
-        Value = glue::glue("{n} ({scales::percent(pct)})")
-      )
-  })() |>
+  mutate(
+    pct   = n / sum(n),
+    Value = glue("{n} ({percent(pct)})")
+  ) |>
   mutate(
     Variable = "Primary Diagnosis",
     Category = truth,
@@ -294,7 +373,7 @@ diag_top4_other <- data |>
     .keep = "none"
   )
 
-diag_top4_other
+diag_all
 ```
 
 Of the 400 reports, how many at least one metastasis?
@@ -389,6 +468,35 @@ tbl_mets_top4 <- data |>
 tbl_mets_top4
 ```
 
+```{r mets_all}
+#| echo: false
+#| output: false
+
+# mets_all: overview of all metastasis locations with counts and percentage of patients.
+mets_all <- data |>
+  filter(!str_detect(redcap_event_name, "LLM")) |> 
+  filter(task == "Metastasis", truth == "Yes") |>
+  mutate(
+    Category = recode(
+      item,
+      !!!mets_labels,
+      .default = stringr::str_to_sentence(
+        gsub("_", " ", sub("_metastasis$", "", item, perl = TRUE))
+      )
+    )
+  ) |>
+  count(Category, name = "n") |>
+  arrange(desc(n)) |>
+  mutate(
+    pct   = n / sum(n),
+    Value = sprintf("%d (%.0f%%)", n, 100 * pct),
+    Variable = "Metastasis location"
+  ) |>
+  select(Variable, Category, Value)
+
+mets_all
+```
+
 ```{r tbl-response-to-treatment}
 #| echo: false
 #| output: false
@@ -442,7 +550,7 @@ table1_df <- bind_rows(
   tbl_age,
   tbl_sex,
   modality_tbl,
-  diag_top4_other,     
+  diag_top4_other2,     
   tbl_mets_top4,
   resp_tbl,
   tf_tbl)
